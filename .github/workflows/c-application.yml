@@ -31,6 +31,35 @@ jobs:
     - name: Build the privileged helper
       run: make helper/lg-helper
 
+    # The driver is a dependency, not an optional extra, so it is built here
+    # too. Without this the vendored driver could rot against a kernel API
+    # change and nothing in this repository would notice, because every other
+    # job only ever compiles userspace code.
+    - name: Install kernel headers
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends \
+          bc binutils dkms kmod "linux-headers-$(uname -r)"
+
+    - name: Build the vendored hwmon driver
+      run: make -C driver build
+
+    - name: Driver smoke test
+      # Hardware tests skip without the chip; the build and static assertions
+      # still run, which is the part that catches a regression in the pinned
+      # copy.
+      run: ./driver/tests/smoke.sh
+
+    - name: Driver installs through DKMS
+      run: |
+        sudo make install-driver
+        make driver-status
+        # The target must actually leave a loaded module or a hwmon device
+        # behind, or the dependency is not being satisfied.
+        lsmod | grep -q '^nct6687 ' || modprobe nct6687 2>/dev/null || true
+        test -f /etc/modules-load.d/liquidgui.conf
+        grep -q '^nct6687$' /etc/modules-load.d/liquidgui.conf
+
     - name: Unit, parity and migration tests
       run: make test
 

@@ -147,9 +147,10 @@ static void test_voltages_are_read(const lg_snapshot *s)
 static void test_implausible_channels_are_rejected(const lg_snapshot *s)
 {
     /*
-     * A temperature outside any plausible range, or one sitting exactly on its
-     * declared minimum, is how a driver says the input is unconnected. It must
-     * be marked invalid rather than reported as a real reading.
+     * A temperature outside any plausible range is not a reading, and must be
+     * marked invalid rather than shown as a real one. The range check is the
+     * mechanism that catches an unconnected input on nct6687 and nct6683, whose
+     * registers read a fixed -63 C for a channel that is not wired.
      */
     for (size_t i = 0; i < s->nsensors; i++) {
         const lg_sensor *x = &s->sensors[i];
@@ -159,6 +160,37 @@ static void test_implausible_channels_are_rejected(const lg_snapshot *s)
         checks++;
         if (x->valid && (x->value < -20.0 || x->value > 150.0)) {
             printf("FAIL: %s reported %.1f C as valid\n", x->label, x->value);
+            failures++;
+        }
+    }
+
+    /*
+     * A live nct6687 temperature must not be discarded for sitting on its
+     * reported minimum or maximum.
+     *
+     * That driver does not implement hwmon's limits: tempN_min and tempN_max
+     * are the lowest and highest values seen since the module loaded, and it
+     * never writes them. The reading is therefore equal to one of them exactly
+     * when it is the extreme so far, so treating that equality as "the input is
+     * unconnected" hides the chip at the temperature most worth seeing. On this
+     * board it discarded PCH at 62 C, System at 50 C and VRM MOS at 44 C.
+     */
+    for (size_t i = 0; i < s->nsensors; i++) {
+        const lg_sensor *x = &s->sensors[i];
+        if (x->cls != LG_SENSOR_TEMP) {
+            continue;
+        }
+        if (x->valid) {
+            continue;
+        }
+        if (strcmp(x->driver, "nct6687") != 0 && strcmp(x->driver, "nct6683") != 0) {
+            continue;
+        }
+        checks++;
+        if (x->value >= -20.0 && x->value <= 150.0) {
+            printf("FAIL: %s (%s) at %.1f C was filtered as unconnected,"
+                   " but it is in range and its driver reports history not limits\n",
+                   x->label, x->driver, x->value);
             failures++;
         }
     }

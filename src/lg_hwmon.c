@@ -181,16 +181,43 @@ static void append_note(lg_snapshot *snap, const char *fmt, ...)
 /*
  * Decide whether a reading is believable.
  *
- * The driver-declared bound check is applied to temperatures only. hwmon
- * drivers park an unconnected temperature input on its *_min sentinel, which
- * is how the NCT6687's "PCIe x1" (pinned at 193 C) and "Virtual 0" (-63 C)
- * are correctly identified as dead.
+ * Two different rules, and the distinction matters:
  *
- * That same rule must NOT be applied to voltages, currents or fans. A CPU
- * Vcore resting at its declared minimum of 558 mV is a perfectly normal idle
- * reading, and a fan reporting 0 rpm may be a real stall that the safety layer
- * needs to see rather than have hidden as "invalid".
+ * Range check, applied to everything. A temperature outside -20..150 C, or a
+ * voltage outside -5..30 V, is not a reading. Note that the nct6687 driver
+ * reported an unconnected "PCIe x1" input as +193 C for a long time, because it
+ * read the register unsigned; that is now fixed in the driver, and the range
+ * check remains as the backstop if a similar chip does the same.
+ *
+ * Bound check, applied to temperatures only, and only for drivers that treat
+ * *_min and *_max as real limits. Some hwmon drivers park an unconnected
+ * temperature input on a sentinel value which then appears as both the reading
+ * and the declared bound, and equality is the tell.
+ *
+ * That rule is NOT valid for nct6687 or nct6683. Both expose tempN_min and
+ * tempN_max as the lowest and highest values seen since the module loaded, not
+ * as configured limits, and never write them. So the current reading is by
+ * definition equal to one of them whenever it is the extreme so far, which is
+ * precisely when the channel is most interesting: this filtered the live PCH at
+ * 62 C, the System sensor at 50 C and VRM MOS at 44 C, because each happened
+ * to be the hottest or coldest seen since boot. History is not a limit, and
+ * comparing a reading to it hides exactly the sensors worth watching.
+ *
+ * The bound check is likewise not applied to voltages, currents or fans. A CPU
+ * Vcore resting at its declared minimum of 558 mV is a normal idle reading, and
+ * a fan reporting 0 rpm may be a real stall that the safety layer needs to see
+ * rather than have hidden as "invalid".
  */
+static bool driver_reports_real_limits(const char *driver)
+{
+    if (driver == NULL || driver[0] == '\0') {
+        return true; /* Unknown driver: assume the conventional meaning. */
+    }
+    if (strcmp(driver, "nct6687") == 0 || strcmp(driver, "nct6683") == 0) {
+        return false;
+    }
+    return true;
+}
 static bool reading_is_valid(lg_sensor *s)
 {
     const double v = s->value;
@@ -236,7 +263,7 @@ static bool reading_is_valid(lg_sensor *s)
         return false;
     }
 
-    if (sentinel_check) {
+    if (sentinel_check && driver_reports_real_limits(s->driver)) {
         if (s->has_min && v == s->min) {
             s->valid = false;
             copy_str(s->note, sizeof(s->note), "at declared minimum");

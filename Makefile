@@ -12,6 +12,18 @@ LIBEXECDIR  ?= $(PREFIX)/libexec/liquidgui
 UDEV_DIR   ?= /etc/udev/rules.d
 DESTDIR    ?=
 
+# The Nuvoton Super-I/O driver. liquidgui reads and controls these chips through
+# hwmon, so without it the interface is missing the motherboard's temperatures,
+# voltages and fan headers entirely. It is installed through DKMS so it is
+# rebuilt when the kernel changes, rather than being pinned to one kernel by a
+# copied .ko that stops matching vermagic after the next upgrade.
+DKMS_NAME     ?= nct6687d
+DKMS_VERSION  ?= 1
+DKMS_SRC      ?= /usr/src/$(DKMS_NAME)-$(DKMS_VERSION)
+DRIVER_DIR    ?= driver
+DRIVER_MODULE  = nct6687
+MODULES_LOAD   = /etc/modules-load.d/liquidgui.conf
+
 CC          ?= cc
 PKG_CONFIG  ?= pkg-config
 INSTALL     ?= install
@@ -63,7 +75,8 @@ TEST_BINS = \
 	tests/test_helper_allowlist \
 	tests/test_config
 
-.PHONY: all test check-parity sanitize install install-helper uninstall clean run dump help
+.PHONY: all test check-parity sanitize install install-helper install-driver \
+	driver-status uninstall uninstall-driver clean run dump help
 
 all: $(BIN)
 
@@ -152,7 +165,81 @@ install-helper: $(HELPER_BIN)
 		udevadm trigger 2>/dev/null || true; \
 	fi
 
-uninstall:
+# ------------------------------------------------------------------ driver
+#
+# liquidgui is not complete without this: the Nuvoton NCT6687/NCT6687D on these
+# boards is what exposes the CPU, VRM, PCH and chipset temperatures, the voltage
+# rails and the fan headers. There is no in-tree driver for it, so without the
+# out-of-tree module the interface shows a fraction of the machine.
+
+# Installed through DKMS rather than by copying a .ko into
+# /lib/modules/<kver>/kernel/drivers/hwmon/. A copied module is built against
+# one kernel and silently unusable after the next upgrade, which on a rolling
+# distro means the sensors disappear on a routine system update with nothing
+# reporting why. DKMS rebuilds on every kernel change instead.
+.PHONY: install-driver
+install-driver:
+	@command -v dkms >/dev/null 2>&1 || { \
+		echo "error: dkms is required to install the driver."; \
+		echo "       Arch:  pacman -S dkms"; \
+		echo "       Debian: apt-get install dkms"; \
+		echo "       Fedora: dnf install dkms"; \
+		echo "       Build from source instead with: make -C $(DRIVER_DIR) install"; \
+		exit 1; }
+	@test -f "$(DRIVER_DIR)/nct6687.c" || { \
+		echo "error: $(DRIVER_DIR)/nct6687.c is missing; the submodule or vendored"; \
+		echo "       copy is not present. Run 'git submodule update --init'."; \
+		exit 1; }
+	@if [ -n "$(DESTDIR)" ]; then \
+		echo "packaging stage: staging the driver sources into $(DKMS_SRC)"; \
+		mkdir -p "$(DKMS_SRC)"; \
+		cp $(DRIVER_DIR)/nct6687.c $(DRIVER_DIR)/Makefile $(DRIVER_DIR)/dkms.conf "$(DKMS_SRC)/"; \
+		exit 0; \
+	fi
+	@echo "staging driver sources in $(DKMS_SRC)"
+	@rm -rf "$(DKMS_SRC)"
+	@install -d -m 755 "$(DKMS_SRC)"
+	@install -m 644 $(DRIVER_DIR)/nct6687.c $(DRIVER_DIR)/Makefile $(DRIVER_DIR)/dkms.conf "$(DKMS_SRC)/"
+	@dkms remove -m $(DKMS_NAME) -v $(DKMS_VERSION) --all >/dev/null 2>&1 || true
+	@dkms install -m $(DKMS_NAME) -v $(DKMS_VERSION) -k "$$(uname -r)"
+	@install -d -m 755 /etc/modules-load.d
+	@printf '%s\n' "# Managed by liquidgui: the Nuvoton Super-I/O hwmon driver." \
+		"# Without it the motherboard sensors and fan headers are absent." \
+		"$(DRIVER_MODULE)" > $(MODULES_LOAD)
+	@echo "installed $(DRIVER_MODULE) via DKMS; loading it now"
+	@modprobe $(DRIVER_MODULE) 2>/dev/null || true
+	@if [ -e /sys/module/$(DRIVER_MODULE) ]; then \
+		echo "  $(DRIVER_MODULE) loaded"; \
+	else \
+		echo "  warning: $(DRIVER_MODULE) did not load; check dmesg"; \
+	fi
+
+.PHONY: driver-status
+driver-status:
+	@echo "dkms:"
+	@dkms status 2>/dev/null || echo "  dkms not installed"
+	@echo "loaded:"
+	@lsmod | grep -q '^$(DRIVER_MODULE) ' \
+		&& echo "  $(DRIVER_MODULE) loaded" \
+		|| echo "  $(DRIVER_MODULE) not loaded"
+	@echo "hwmon devices from $(DRIVER_MODULE):"
+	@found=0; for d in /sys/class/hwmon/hwmon*; do \
+		[ -e "$$d" ] || continue; \
+		if [ "$$(basename "$$(readlink -f "$$d/device/driver" 2>/dev/null)")" = "$(DRIVER_MODULE)" ]; then \
+			echo "  $$d: $$(cat "$$d/name" 2>/dev/null)"; found=1; \
+		fi; \
+	done; \
+	if [ $$found = 0 ]; then echo "  none"; fi; \
+	exit 0
+
+.PHONY: uninstall-driver
+uninstall-driver:
+	@rm -f $(MODULES_LOAD)
+	@dkms remove -m $(DKMS_NAME) -v $(DKMS_VERSION) --all 2>/dev/null || true
+	@rm -rf "$(DKMS_SRC)"
+	@modprobe -r $(DRIVER_MODULE) 2>/dev/null || true
+
+uninstall: uninstall-driver
 	rm -f $(DESTDIR)$(BINDIR)/$(BIN)
 	rm -f $(DESTDIR)$(LIBEXECDIR)/$(HELPER)
 	rm -f $(DESTDIR)$(UDEV_DIR)/60-liquidctl.rules
@@ -172,4 +259,7 @@ help:
 	  '  make dump            print discovered sensors and controls as JSON' \
 	  '  sudo make install    install the binary' \
 	  '  sudo make install-helper  install the setuid helper and udev rule' \
-	  '  make uninstall       remove installed files'
+	  '  sudo make install-driver  install the NCT6687 hwmon driver via DKMS' \
+	  '  make driver-status   report driver installation and hwmon devices' \
+	  '  sudo make uninstall  remove everything this Makefile installed' \
+	  '  sudo make uninstall-driver  remove only the driver'

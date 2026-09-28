@@ -35,12 +35,21 @@ Everything the kernel offers, not just temperatures and fan speeds:
 | Power | `power/energy1_input` energy counters |
 | Thresholds | `*_crit`, `*_max`, `*_min`, NVMe `*_alarm` |
 
-**Dead channels are filtered rather than displayed.** An NCT6687 on this board
-reports `PCIe x1` pinned at 193 °C and `Virtual 0` at −63 °C; those are
-unconnected inputs parked on a driver-declared bound, and the old interface
-rendered them as if they were real temperatures. A temperature equal to its
-declared `*_min` is treated as unconnected. The same test is deliberately *not*
-applied to voltages or fan speeds, where sitting at a declared minimum is
+**Dead channels are filtered rather than displayed.** An unconnected
+temperature input reads a fixed value well outside any plausible range — on
+this board `PCIe x1` and `Virtual 0` both sit at −63 °C, and the nct6687 driver
+also used to read one as +193 °C because it took the register unsigned. A
+temperature outside −20…150 °C is treated as a reading that is not there.
+
+A second rule was tried and rejected: treating a temperature that equals its
+declared `*_min` as unconnected. That is how some hwmon drivers park an
+unconnected input, but `nct6687` and `nct6683` do not implement hwmon limits —
+their `tempN_min` and `tempN_max` are the lowest and highest values seen since
+the module loaded, and are never written. The reading is equal to one of them
+exactly when it is the extreme so far, so the rule hid the live PCH at 62 °C,
+System at 50 °C and VRM MOS at 44 °C. The equality check is therefore only
+applied for drivers that report real limits. The same reasoning keeps the rule
+off voltages and fan speeds entirely, where sitting at a declared minimum is
 legitimate — an idle Vcore at 558 mV, or a fan that has stopped.
 
 ## Build
@@ -51,10 +60,46 @@ Requires GTK3 and a C11 compiler. On Arch: `pacman -S gtk3`.
 make
 sudo make install           # installs /usr/bin/liquidgui
 sudo make install-helper    # installs the setuid helper and the udev rule
+sudo make install-driver    # installs the NCT6687 hwmon driver via DKMS
 ```
 
 `PREFIX` defaults to `/usr`. To install elsewhere, for example under
 `/usr/local`, pass `PREFIX=/usr/local` to both targets.
+
+## The driver is a dependency, not an extra
+
+**Without the nct6687 driver, most of this interface is empty.** The Nuvoton
+NCT6687/NCT6687D on these boards is what exposes the CPU, VRM, PCH and chipset
+temperatures, the voltage rails and the fan headers. There is no in-tree driver
+for it, so without the out-of-tree module those channels do not exist as far as
+userspace is concerned.
+
+`make install-driver` installs it, and it is installed through **DKMS** rather
+than by copying a `.ko` into `/lib/modules/<kver>/kernel/drivers/hwmon/`. That
+matters: a copied module is built against one kernel and stops matching
+`vermagic` after the next upgrade, so on a rolling distro the sensors silently
+disappear on a routine system update with nothing reporting why. DKMS rebuilds
+on every kernel change instead. The target also writes
+`/etc/modules-load.d/liquidgui.conf` so the module loads at boot.
+
+```bash
+sudo make install-driver
+make driver-status           # dkms state, load state, hwmon devices
+```
+
+To check what a board is exposing, and confirm the driver is present:
+
+```bash
+make driver-status
+./liquidgui --dump-detect | head
+```
+
+`driver/` holds the driver source, vendored from
+[`akadata/nct6687d`](https://github.com/akadata/nct6687d) and pinned to the
+revision in `driver/REVISION`. It is a separately compiled kernel module under
+GPL-2.0-or-later, not linked into this MIT-licensed binary. `make -C driver
+check` runs the driver's own tests, including a PWM write and readback that
+restores the original value.
 
 ## Privileged writes
 
@@ -208,11 +253,13 @@ Tested on:
 
 - Manufacturer: `Micro-Star International Co., Ltd.`
 - Product Name: `MPG Z790 CARBON WIFI (MS-7D89)`
-- Super-I/O: `nct6687` (writable headers) and `nct6683` (monitoring only), via
-  the DKMS driver in `/usr/src/nct6687d`
+- Super-I/O: `nct6687` (writable headers) and `nct6683` (monitoring only), from
+  the DKMS driver in `driver/`, installed to `/usr/src/nct6687d-1` by
+  `make install-driver`
 - AIO: NZXT Kraken 2023 via the in-kernel `nzxt_kraken3` driver
 
-For Nuvoton NCT6687/NCT6687D boards see
+The Nuvoton NCT6687/NCT6687D driver is vendored in `driver/`, so no separate
+checkout is needed. Upstream development happens at
 [`akadata/nct6687d`](https://github.com/akadata/nct6687d).
 
 ## Links
