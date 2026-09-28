@@ -22,6 +22,16 @@ void lg_curve_init(lg_curve *curve)
     }
     memset(curve, 0, sizeof(*curve));
     curve->enabled = true;
+    /*
+     * No manual speed chosen yet. Not 0, which would stop the fan, and not 100,
+     * which would slam a control the user has never looked at to full speed
+     * the moment they select manual mode. -1 makes the resolver fall back to
+     * the curve instead of inventing a number for a fan nobody has configured.
+     *
+     * When a control is deliberately given a manual speed the interface writes
+     * 0..100, and that is the point at which the value stops being a guess.
+     */
+    curve->manual_duty = -1;
 }
 
 size_t lg_curve_default_points(lg_point *out, size_t cap, const char *label)
@@ -273,4 +283,52 @@ int lg_curve_duty_points(const lg_point *points, size_t n, double temp_c)
     lg_curve_init(&scratch);
     lg_curve_set_points(&scratch, points, n);
     return lg_curve_duty(&scratch, temp_c);
+}
+
+bool lg_curve_resolve_duty(const lg_curve *curve, bool manual_mode, bool failsafe,
+                           double source_temp, int *out_duty)
+{
+    if (out_duty == NULL) {
+        return false;
+    }
+    if (failsafe) {
+        *out_duty = 100;
+        return true;
+    }
+    if (curve == NULL || !curve->enabled) {
+        return false;
+    }
+
+    int duty;
+    /*
+     * Manual mode, but nobody has chosen a speed for this control yet. Fall
+     * back to the curve rather than inventing one: a control that has never
+     * been configured should behave as it always has until the user says
+     * otherwise, not be sent to some arbitrary duty by the act of switching
+     * modes.
+     */
+    const bool manual_known = manual_mode && curve->manual_duty >= 0;
+
+    if (manual_known) {
+        duty = curve->manual_duty;
+    } else {
+        if (isnan(source_temp)) {
+            /* No reading to follow. Writing a duty derived from nothing would
+             * be a guess about the cooling, so leave the fan as it is. */
+            return false;
+        }
+        duty = lg_curve_duty_points(curve->points, curve->npoints, source_temp);
+    }
+
+    if (curve->min_duty > duty) {
+        duty = curve->min_duty;
+    }
+    if (duty < 0) {
+        duty = 0;
+    } else if (duty > 100) {
+        duty = 100;
+    }
+
+    *out_duty = duty;
+    return true;
 }

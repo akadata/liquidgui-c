@@ -79,6 +79,12 @@ struct lg_ui {
     int pending_stalled;
     gboolean pending_failsafe;
     double pending_failsafe_temp;
+    /* Mode selector and the manual duty spinner that only matters in manual. */
+    GtkWidget *mode_combo;
+    GtkWidget *manual_box;
+    GtkWidget *manual_scale;
+    GtkWidget *manual_value;
+    GtkWidget *failsafe_spin;
 
     /* Curve editing. */
     int drag_index;
@@ -98,6 +104,8 @@ static gpointer ui_worker_entry(gpointer data);
 /* ------------------------------------------------------------- appearance */
 
 static void apply_theme(lg_ui *ui);
+static void update_mode_widgets(lg_ui *ui);
+static void sync_manual_widgets(lg_ui *ui);
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -647,6 +655,8 @@ static void update_curve_labels(lg_ui *ui)
 static void refresh_curve(lg_ui *ui)
 {
     update_curve_labels(ui);
+    sync_manual_widgets(ui);
+    update_mode_widgets(ui);
     gtk_widget_queue_draw(ui->curve_area);
 }
 
@@ -873,7 +883,7 @@ static void on_toggle_enabled(GtkWidget *w, gpointer data)
     if (c == NULL) {
         return;
     }
-    lg_curve *curve = (lg_curve *)lg_config_curve(&ui->cfg.config, c);
+    lg_curve *curve = lg_config_curve_mut(&ui->cfg.config, c);
     if (curve == NULL) {
         return;
     }
@@ -882,13 +892,114 @@ static void on_toggle_enabled(GtkWidget *w, gpointer data)
     rebuild_controls(ui);
 }
 
-static void on_auto_toggled(GtkWidget *w, gpointer data)
+/*
+ * Automatic curves versus manual duties.
+ *
+ * These were two independent checkboxes, "Pause writes" and "Auto apply", which
+ * between them described four states of which two were identical: off/paused and
+ * on/paused both did nothing, and nothing at all happened to say so. Worse,
+ * turning automatic off left the user with no way to set a fan speed, because
+ * there was no manual control anywhere -- so it was not a choice of manual
+ * control, it was a choice of no control.
+ *
+ * One selector for the mode, with pause kept separate as the emergency brake
+ * it is. Renamed from auto_apply in the interface only; the stored key is
+ * unchanged so an existing config keeps meaning what it meant.
+ */
+static void on_mode_changed(GtkWidget *w, gpointer data)
 {
     lg_ui *ui = data;
-    ui->cfg.config.auto_apply = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w));
+    const int idx = gtk_combo_box_get_active(GTK_COMBO_BOX(w));
+    if (idx < 0) {
+        return;
+    }
+    const bool automatic = (idx == 0);
+    ui->cfg.config.auto_apply = automatic;
     lg_config_save(&ui->cfg.config);
-    set_status(ui, "Automatic curve application %s.",
-               ui->cfg.config.auto_apply ? "enabled" : "disabled");
+    update_mode_widgets(ui);
+    request_apply(ui);
+    if (automatic) {
+        set_status(ui, "Automatic fan curves: fan speed follows temperature.");
+    } else {
+        set_status(ui, "Manual: each fan holds its own speed, set below.");
+    }
+}
+
+/* Show only the controls that mean something in the current mode. */
+static void update_mode_widgets(lg_ui *ui)
+{
+    if (ui->manual_box != NULL) {
+        gtk_widget_set_visible(ui->manual_box, !ui->cfg.config.auto_apply);
+    }
+    if (ui->curve_info != NULL && !ui->cfg.config.auto_apply) {
+        /*
+         * The curve stays editable in manual mode. Hiding it would suggest the
+         * curve is what is currently driving the fan, which is the opposite of
+         * the truth, and it would throw away the shape the user wants back when
+         * they return to automatic.
+         */
+        gtk_label_set_text(GTK_LABEL(ui->curve_info),
+                           "Manual mode: this fan holds its own speed. "
+                           "The curve below is saved and used when you return to automatic.");
+    } else if (ui->curve_info != NULL) {
+        gtk_label_set_text(GTK_LABEL(ui->curve_info), "Select a control to edit its curve.");
+    }
+    gtk_widget_queue_draw(ui->curve_area);
+}
+
+/* Manual duty for the selected control. */
+static void on_manual_duty_changed(GtkWidget *w, gpointer data)
+{
+    lg_ui *ui = data;
+    lg_control *c = selected_control(ui);
+    if (c == NULL) {
+        return;
+    }
+    lg_curve *curve = lg_config_curve_mut(&ui->cfg.config, c);
+    if (curve == NULL) {
+        return;
+    }
+    const int duty = gtk_adjustment_get_value(gtk_range_get_adjustment(GTK_RANGE(w)));
+    if (curve->manual_duty == duty) {
+        return;
+    }
+    curve->manual_duty = duty;
+    if (ui->manual_value != NULL) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d%%", duty);
+        gtk_label_set_text(GTK_LABEL(ui->manual_value), buf);
+    }
+    lg_config_save(&ui->cfg.config);
+    set_status(ui, "%s will hold %d%%.", c->label, duty);
+    request_apply(ui);
+}
+
+/* Reflect the selected control's manual duty into the spinner. */
+static void sync_manual_widgets(lg_ui *ui)
+{
+    lg_control *c = selected_control(ui);
+    const lg_curve *curve = (c != NULL) ? lg_config_curve(&ui->cfg.config, c) : NULL;
+    /*
+     * -1 means no manual speed has been chosen for this control. Show that as
+     * what it is rather than displaying a number the user never picked, and
+     * have the curve decide until they pick one.
+     */
+    const int duty = (curve != NULL) ? curve->manual_duty : -1;
+    if (ui->manual_scale != NULL && duty >= 0) {
+        if ((int)gtk_adjustment_get_value(gtk_range_get_adjustment(GTK_RANGE(ui->manual_scale)))
+            != duty) {
+            gtk_adjustment_set_value(gtk_range_get_adjustment(GTK_RANGE(ui->manual_scale)), duty);
+        }
+    }
+    if (ui->manual_value != NULL) {
+        char buf[16];
+        if (duty >= 0) {
+            snprintf(buf, sizeof(buf), "%d%%", duty);
+        } else {
+            snprintf(buf, sizeof(buf), "curve");
+        }
+        gtk_label_set_text(GTK_LABEL(ui->manual_value), buf);
+    }
 }
 
 static void on_pause_toggled(GtkWidget *w, gpointer data)
@@ -952,9 +1063,17 @@ static void on_theme(GtkWidget *w, gpointer data)
 static void on_failsafe(GtkWidget *w, gpointer data)
 {
     lg_ui *ui = data;
-    ui->cfg.config.failsafe_temp = atoi(gtk_entry_get_text(GTK_ENTRY(w)));
+    const int temp = (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(w));
+    if (ui->cfg.config.failsafe_temp == temp) {
+        return;
+    }
+    ui->cfg.config.failsafe_temp = temp;
     lg_config_save(&ui->cfg.config);
-    set_status(ui, "Failsafe threshold set to %d C.", ui->cfg.config.failsafe_temp);
+    if (temp <= 0) {
+        set_status(ui, "Failsafe off. Fans will not be forced to full speed on heat.");
+    } else {
+        set_status(ui, "Failsafe: all fans to 100%% above %d C.", temp);
+    }
 }
 
 /* ------------------------------------------------------------- exit path */
@@ -1100,7 +1219,7 @@ static gpointer ui_worker_entry(gpointer data)
         bool failsafe = false;
         char message[256] = {0};
 
-        bool do_apply = ui->cfg.config.auto_apply && !ui->cfg.config.paused;
+        bool do_apply = !ui->cfg.config.paused;
 
         /* Failsafe overrides everything: any enabled control goes to full. */
         if (ui->cfg.config.failsafe_temp > 0 && !isnan(snap->cpu_temp) &&
@@ -1116,6 +1235,7 @@ static gpointer ui_worker_entry(gpointer data)
         typedef struct {
             bool enabled;
             int min_duty;
+            int manual_duty;
             lg_point points[LG_CURVE_MAX_POINTS];
             size_t npoints;
         } lg_curve_params;
@@ -1131,6 +1251,7 @@ static gpointer ui_worker_entry(gpointer data)
             }
             params[nparams].enabled = curve->enabled;
             params[nparams].min_duty = curve->min_duty;
+            params[nparams].manual_duty = curve->manual_duty;
             params[nparams].npoints = curve->npoints;
             memcpy(params[nparams].points, curve->points,
                    curve->npoints * sizeof(lg_point));
@@ -1143,20 +1264,23 @@ static gpointer ui_worker_entry(gpointer data)
                 lg_control *c = &snap->controls[i];
                 const lg_curve_params *p = &params[i];
 
+                /*
+                 * The mode, the failsafe and the curve are resolved in one
+                 * place, shared with the headless daemon, so both agree on what
+                 * a control should be doing right now.
+                 */
+                lg_curve tmp;
+                memset(&tmp, 0, sizeof(tmp));
+                tmp.enabled = p->enabled;
+                tmp.min_duty = p->min_duty;
+                tmp.manual_duty = p->manual_duty;
+                tmp.npoints = p->npoints;
+                memcpy(tmp.points, p->points, p->npoints * sizeof(lg_point));
+
                 int duty;
-                if (failsafe) {
-                    duty = 100;
-                } else {
-                    if (!p->enabled) {
-                        continue;
-                    }
-                    if (isnan(snap->cpu_temp)) {
-                        continue;
-                    }
-                    duty = lg_curve_duty_points(p->points, p->npoints, snap->cpu_temp);
-                    if (p->min_duty > duty) {
-                        duty = p->min_duty;
-                    }
+                if (!lg_curve_resolve_duty(&tmp, !ui->cfg.config.auto_apply, failsafe,
+                                           snap->cpu_temp, &duty)) {
+                    continue;
                 }
 
                 char err[192] = {0};
@@ -1321,15 +1445,34 @@ GtkWidget *lg_ui_new(lg_ui_config *cfg)
 
     gtk_box_pack_start(GTK_BOX(header), gtk_separator_new(GTK_ORIENTATION_VERTICAL), FALSE, FALSE, 0);
 
+    /*
+     * One selector for the mode, not two toggles. "Pause writes" and "Auto
+     * apply" were independent, so off/paused and on/paused both did nothing
+     * without saying so, and turning automatic off removed the only way to set
+     * a speed at all. Pause stays, as the emergency brake it is.
+     */
+    ui->mode_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ui->mode_combo),
+                                   "Automatic fan curves");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ui->mode_combo),
+                                   "Manual fan speeds");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(ui->mode_combo),
+                             ui->cfg.config.auto_apply ? 0 : 1);
+    g_signal_connect(ui->mode_combo, "changed", G_CALLBACK(on_mode_changed), ui);
+    gtk_widget_set_tooltip_text(
+        ui->mode_combo,
+        "Automatic: each fan follows its curve as temperature rises.\n"
+        "Manual: each fan holds a speed you choose, regardless of temperature.\n"
+        "The failsafe still overrides both, sending every fan to full speed "
+        "above the threshold.");
+    gtk_box_pack_start(GTK_BOX(header), ui->mode_combo, FALSE, FALSE, 0);
+
     ui->pause_check = gtk_check_button_new_with_label("Pause writes");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ui->pause_check), ui->cfg.config.paused);
     g_signal_connect(ui->pause_check, "toggled", G_CALLBACK(on_pause_toggled), ui);
+    gtk_widget_set_tooltip_text(ui->pause_check,
+                                "Stop writing to fans. Readings keep updating.");
     gtk_box_pack_start(GTK_BOX(header), ui->pause_check, FALSE, FALSE, 0);
-
-    ui->auto_check = gtk_check_button_new_with_label("Auto apply");
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ui->auto_check), ui->cfg.config.auto_apply);
-    g_signal_connect(ui->auto_check, "toggled", G_CALLBACK(on_auto_toggled), ui);
-    gtk_box_pack_start(GTK_BOX(header), ui->auto_check, FALSE, FALSE, 0);
 
     /* Preset menu. */
     GtkWidget *preset_btn = gtk_menu_button_new();
@@ -1435,18 +1578,29 @@ GtkWidget *lg_ui_new(lg_ui_config *cfg)
     floor_box = floor_box;
     gtk_box_pack_start(GTK_BOX(left), floor_box, FALSE, FALSE, 0);
 
+    /*
+     * Failsafe threshold: every fan to full speed above this, in both modes.
+     *
+     * A spin button rather than a free-text entry, because the old field took
+     * whatever was typed -- including a non-number, which atoi turns into 0 and
+     * which means "disabled" -- and silently did nothing. The range starts at 0
+     * so 0 can still be chosen deliberately to switch it off, and 200 is enough
+     * headroom that a legitimate high threshold is reachable.
+     */
     GtkWidget *fs_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     GtkWidget *fs_label = gtk_label_new("Failsafe above");
-    GtkWidget *fs_entry = gtk_entry_new();
-    gtk_entry_set_width_chars(GTK_ENTRY(fs_entry), 4);
-    {
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%d", ui->cfg.config.failsafe_temp);
-        gtk_entry_set_text(GTK_ENTRY(fs_entry), buf);
-    }
-    g_signal_connect(fs_entry, "changed", G_CALLBACK(on_failsafe), ui);
+    ui->failsafe_spin = gtk_spin_button_new_with_range(0, 200, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(ui->failsafe_spin),
+                              (double)ui->cfg.config.failsafe_temp);
+    gtk_widget_set_tooltip_text(
+        ui->failsafe_spin,
+        "Every fan goes to full speed above this temperature, in both automatic "
+        "and manual mode. 0 switches this off.");
+    g_signal_connect(ui->failsafe_spin, "value-changed", G_CALLBACK(on_failsafe), ui);
     gtk_box_pack_start(GTK_BOX(fs_box), fs_label, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(fs_box), fs_entry, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(fs_box), ui->failsafe_spin, FALSE, FALSE, 0);
+    GtkWidget *fs_unit = gtk_label_new("\u00b0C");
+    gtk_box_pack_start(GTK_BOX(fs_box), fs_unit, FALSE, FALSE, 0);
     fs_box = fs_box;
     gtk_box_pack_start(GTK_BOX(left), fs_box, FALSE, FALSE, 0);
 
@@ -1456,6 +1610,36 @@ GtkWidget *lg_ui_new(lg_ui_config *cfg)
     gtk_widget_set_margin_end(right, 10);
     gtk_widget_set_margin_top(right, 8);
     gtk_paned_pack2(GTK_PANED(panes), right, TRUE, TRUE);
+
+    /*
+     * Manual speed for the selected control.
+     *
+     * This is what was missing before. Turning automatic mode off stopped every
+     * write and, with no control here, left no way to set a fan speed at all --
+     * so that was not a choice of manual control, it was a choice of none. A
+     * manual mode that cannot express a manual speed is not a mode.
+     *
+     * Shown only in manual mode, so the panel never has two competing controls
+     * for the same fan. The curve below it stays visible and editable in both
+     * modes, because hiding it would suggest the curve is what is currently
+     * driving the fan, and would discard the shape the user wants back.
+     */
+    ui->manual_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_margin_bottom(ui->manual_box, 4);
+    GtkWidget *man_label = gtk_label_new("Hold this fan at");
+    ui->manual_scale =
+        gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 100, 1);
+    gtk_scale_set_draw_value(GTK_SCALE(ui->manual_scale), FALSE);
+    gtk_widget_set_hexpand(ui->manual_scale, TRUE);
+    gtk_range_set_value(GTK_RANGE(ui->manual_scale), 100);
+    g_signal_connect(ui->manual_scale, "value-changed", G_CALLBACK(on_manual_duty_changed), ui);
+    ui->manual_value = gtk_label_new("100%");
+    gtk_label_set_width_chars(GTK_LABEL(ui->manual_value), 5);
+    gtk_label_set_xalign(GTK_LABEL(ui->manual_value), 1.0);
+    gtk_box_pack_start(GTK_BOX(ui->manual_box), man_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(ui->manual_box), ui->manual_scale, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(ui->manual_box), ui->manual_value, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(right), ui->manual_box, FALSE, FALSE, 0);
 
     ui->curve_info = gtk_label_new("Select a control to edit its curve.");
     gtk_label_set_xalign(GTK_LABEL(ui->curve_info), 0.0);
@@ -1638,15 +1822,27 @@ void lg_ui_poll(lg_ui *ui)
         show_banner(ui, "", FALSE);
     }
 
+    /*
+     * Say what the fans are actually doing, not which internal flag is set.
+     * "Automatic application is off" described a mechanism and left the user
+     * to work out that it meant nothing was being written.
+     */
     if (ui->cfg.config.paused) {
-        set_status(ui, "Paused. %zu sensors, %zu controls, no writes.",
+        set_status(ui, "Paused: readings continue, no fans are being driven. "
+                       "%zu sensors, %zu controls.",
                    ui->cfg.snapshot.nsensors, ui->cfg.snapshot.ncontrols);
+    } else if (failsafe) {
+        set_status(ui, "Failsafe: all fans at 100%% (over %d C). %zu sensors, %zu controls.",
+                   ui->cfg.config.failsafe_temp, ui->cfg.snapshot.nsensors,
+                   ui->cfg.snapshot.ncontrols);
     } else if (ui->cfg.config.auto_apply) {
-        set_status(ui, "Applied %d curve(s); %zu sensors, %zu controls.", applied,
-                   ui->cfg.snapshot.nsensors, ui->cfg.snapshot.ncontrols);
+        set_status(ui, "Automatic curves: %d fan(s) following temperature. "
+                       "%zu sensors, %zu controls.",
+                   applied, ui->cfg.snapshot.nsensors, ui->cfg.snapshot.ncontrols);
     } else {
-        set_status(ui, "%zu sensors, %zu controls. Automatic application is off.",
-                   ui->cfg.snapshot.nsensors, ui->cfg.snapshot.ncontrols);
+        set_status(ui, "Manual: %d fan(s) holding a fixed speed. "
+                       "%zu sensors, %zu controls.",
+                   applied, ui->cfg.snapshot.nsensors, ui->cfg.snapshot.ncontrols);
     }
 }
 

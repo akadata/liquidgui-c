@@ -151,6 +151,39 @@ A flat 255 means nothing is applying the curves. Check, in order: is the service
 active, is `auto_apply` true in the config, and is each curve enabled with points
 that actually vary.
 
+## Modes
+
+The mode selector in the header chooses who drives the fans:
+
+| Mode | Behaviour |
+|---|---|
+| **Automatic fan curves** | each fan follows its curve as temperature rises |
+| **Manual fan speeds** | each fan holds the speed you set, and does not move with temperature |
+
+**Pause writes** is separate and is the only thing that stops writes entirely.
+Readings keep updating while paused, so it can be used to hand the fans back
+without losing the view.
+
+The failsafe sits over both modes: above the threshold every fan goes to 100 %.
+It is deliberately not gated on the mode, on the enable toggle, or on anything
+else, because the one thing that must not be switchable is the thing that stops
+a machine cooking. Set it in the left panel; 0 switches it off.
+
+In manual mode a fan with no speed chosen yet keeps following its curve, so
+switching modes does not silently stop or slam a control nobody has configured.
+Moving the slider is what opts a fan into manual control, and the interface says
+`curve` on the readout until you do. An explicit 0 % is honoured, because
+stopping a fan is a legitimate thing to ask for — use the failsafe, not a zero,
+if you need a floor.
+
+The curve stays editable in manual mode. It is what the fan will return to when
+you switch back, and hiding it would suggest it was what was currently driving
+the fan.
+
+**Do not run the daemon and the window at the same time.** Both read the same
+configuration and neither knows about the other, so they would overwrite each
+other's duties.
+
 ## Privileged writes
 
 hwmon `pwm*` nodes are `root:root 0644`, so writing them needs root. Rather than

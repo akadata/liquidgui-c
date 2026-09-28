@@ -599,6 +599,115 @@ static void test_curve_ramps(void)
     }
 }
 
+/*
+ * The two modes, and the safety layer that sits over both.
+ *
+ * Automatic follows the curve as temperature rises; manual holds a fixed speed
+ * and ignores temperature entirely. The failsafe overrides both, because the
+ * one thing that must not be switchable is the thing that stops a machine
+ * cooking. The min_duty floor applies in both, so a stray zero in manual mode
+ * cannot stall a fan -- manual mode with no curve in it should not also be the
+ * mode that can stop the cooling.
+ */
+static void test_modes(void)
+{
+    lg_curve c;
+    lg_curve_init(&c);
+    lg_point pts[] = {{30, 30}, {40, 38}, {50, 50}, {60, 72}, {72, 100}};
+    lg_curve_set_points(&c, pts, 5);
+    c.enabled = true;
+
+    /*
+     * A control nobody has touched has no manual speed, and that is not the
+     * same as 0 or as 100. The resolver falls back to the curve for it, so
+     * selecting manual mode does not silently stop an unconfigured fan or
+     * slam one nobody has looked at to full speed.
+     */
+    check(c.manual_duty == -1, "a fresh curve has no manual speed set yet");
+
+    /* Automatic moves with temperature. */
+    int cold = 0, hot = 0;
+    check(lg_curve_resolve_duty(&c, false, false, 30.0, &cold) && cold == 30,
+          "automatic follows the curve at 30 C");
+    check(lg_curve_resolve_duty(&c, false, false, 75.0, &hot) && hot == 100,
+          "automatic follows the curve at 75 C");
+    check(hot > cold, "automatic ramps up as temperature rises");
+
+    /* Manual does not move at all. */
+    c.manual_duty = 55;
+    bool steady = true;
+    for (double t = 20.0; t <= 95.0; t += 5.0) {
+        int d = -1;
+        if (!lg_curve_resolve_duty(&c, true, false, t, &d) || d != 55) {
+            steady = false;
+        }
+    }
+    check(steady, "manual holds its speed across the whole temperature range");
+
+    /* Failsafe overrides both modes, and a disabled curve. */
+    c.enabled = false;
+    int d = -1;
+    check(lg_curve_resolve_duty(&c, true, true, 80.0, &d) && d == 100,
+          "failsafe overrides manual even on a disabled curve");
+    c.enabled = true;
+    check(lg_curve_resolve_duty(&c, false, true, 80.0, &d) && d == 100,
+          "failsafe overrides automatic");
+    /*
+     * At 80 C the curve already reaches 100% on its own, so the failsafe being
+     * "off" there proves nothing. Ask at a temperature where the curve is well
+     * short of full speed, where a duty of 100 can only have come from the
+     * failsafe.
+     */
+    check(lg_curve_resolve_duty(&c, false, false, 50.0, &d) && d == 50,
+          "at 50 C the curve is in charge, not the failsafe");
+    c.enabled = false;
+    check(!lg_curve_resolve_duty(&c, true, false, 30.0, &d),
+          "a disabled curve writes nothing when not failing over");
+    c.enabled = true;
+
+    /* The floor is a floor, not a suggestion, and it applies in manual too. */
+    c.manual_duty = 5;
+    c.min_duty = 40;
+    check(lg_curve_resolve_duty(&c, true, false, 30.0, &d) && d == 40,
+          "min_duty is applied in manual mode");
+    c.manual_duty = 80;
+    check(lg_curve_resolve_duty(&c, true, false, 30.0, &d) && d == 80,
+          "min_duty does not cap a higher manual speed");
+    c.min_duty = 0;
+
+    /* No source reading: automatic holds rather than guessing, manual does not
+     * need a reading at all. */
+    check(!lg_curve_resolve_duty(&c, false, false, NAN, &d),
+          "automatic holds the fan when there is no source reading");
+    check(lg_curve_resolve_duty(&c, true, false, NAN, &d) && d == 80,
+          "manual needs no source reading to hold a speed");
+
+    /* Failsafe still works with no source reading, which is the case that
+     * matters most: the CPU sensor has failed, so nothing would act. */
+    check(lg_curve_resolve_duty(&c, false, true, NAN, &d) && d == 100,
+          "failsafe acts even when the source reading is unavailable");
+
+    /* Out-of-range values are clamped rather than written to hardware. */
+    c.manual_duty = 250;
+    check(lg_curve_resolve_duty(&c, true, false, 30.0, &d) && d == 100,
+          "an out-of-range manual speed is clamped, not written");
+    /*
+     * A negative manual speed is "unset" rather than a demand for a negative
+     * duty, so the control falls back to its curve instead of being driven to
+     * zero. The config loader normalises this on read; the resolver defends
+     * itself anyway, since a caller can set the field directly.
+     */
+    c.manual_duty = -20;
+    check(lg_curve_resolve_duty(&c, true, false, 30.0, &d) && d == 30,
+          "a negative manual speed falls back to the curve, not to a stop");
+    c.manual_duty = 0;
+    check(lg_curve_resolve_duty(&c, true, false, 30.0, &d) && d == 0,
+          "an explicit 0% is honoured, since stopping a fan is a real choice");
+    c.manual_duty = 45;
+    check(lg_curve_resolve_duty(&c, true, false, 90.0, &d) && d == 45,
+          "manual holds 45% even at 90 C, well past the curve's range");
+}
+
 int main(int argc, char **argv)
 {
     const char *golden = (argc > 1) ? argv[1] : "tests/golden/detect_golden.json";
@@ -627,6 +736,7 @@ int main(int argc, char **argv)
     test_bound_formatting();
     test_daemon_defaults();
     test_curve_ramps();
+    test_modes();
     test_golden_is_loadable(golden);
     test_power_formatting();
 

@@ -254,6 +254,20 @@ bool lg_config_remove(lg_config *cfg, const char *key)
     return false;
 }
 
+lg_curve *lg_config_curve_mut(lg_config *cfg, const lg_control *ctl)
+{
+    /*
+     * The same entry as lg_config_curve, without the const.
+     *
+     * The read accessor is const because most callers only look, but it hands
+     * back storage the caller is expected to be able to edit -- the curve
+     * editor writes points, the enable toggle writes enabled. Casting the const
+     * away at each site hides that, and hides it further with every new caller,
+     * so the mutating form is spelled out instead.
+     */
+    return (lg_curve *)(void *)lg_config_curve(cfg, ctl);
+}
+
 const lg_curve *lg_config_curve(lg_config *cfg, const lg_control *ctl)
 {
     if (cfg == NULL || ctl == NULL) {
@@ -605,6 +619,20 @@ bool lg_config_load(lg_config *cfg, const lg_snapshot *snap, const char *hwmon_r
         load_points(&entry->curve, lg_json_get(item, "points"));
         entry->curve.enabled = lg_json_get_bool(item, "enabled", true);
         entry->curve.min_duty = (int)lg_json_get_num(item, "min_duty", 0);
+        /*
+         * A config written before manual mode existed has no key here, and -1
+         * means "no manual speed was ever chosen", which is what is true. It
+         * must not be defaulted to 0 (stops the fan) or to 100 (sends a control
+         * nobody has configured to full speed the moment manual mode is
+         * selected). An existing manual_duty outside 0..100 is clamped; one
+         * below zero becomes unset rather than a stop.
+         */
+        entry->curve.manual_duty = (int)lg_json_get_num(item, "manual_duty", -1);
+        if (entry->curve.manual_duty > 100) {
+            entry->curve.manual_duty = 100;
+        } else if (entry->curve.manual_duty < 0) {
+            entry->curve.manual_duty = -1;
+        }
         snprintf(entry->curve.source, sizeof(entry->curve.source), "%s",
                  lg_json_get_str(item, "source", ""));
     }
@@ -747,6 +775,9 @@ char *lg_config_to_json(const lg_config *cfg)
         lg_json_raw(&w, ", ");
         lg_json_key(&w, "min_duty");
         lg_json_write_num(&w, e->curve.min_duty);
+        lg_json_raw(&w, ", ");
+        lg_json_key(&w, "manual_duty");
+        lg_json_write_num(&w, e->curve.manual_duty);
         if (e->curve.source[0] != '\0') {
             lg_json_raw(&w, ", ");
             lg_json_key(&w, "source");

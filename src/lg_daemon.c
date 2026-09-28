@@ -130,7 +130,16 @@ int lg_daemon_pass(lg_daemon_state *st)
 
     const bool failsafe = st->config->failsafe_temp > 0 && !isnan(snap->cpu_temp) &&
                           snap->cpu_temp >= (double)st->config->failsafe_temp;
-    const bool do_apply = st->config->auto_apply && !st->config->paused;
+    /*
+     * auto_apply selects the mode -- follow the curve, or hold a fixed speed --
+     * and no longer gates whether anything is written at all. It used to do
+     * both, which made manual mode impossible: turning it off to hold a fixed
+     * speed also stopped every write, so the fan sat at whatever it was doing
+     * before and looked like it was still tracking temperature.
+     *
+     * Pausing is the only thing that stops writes, and it is always explicit.
+     */
+    const bool do_apply = !st->config->paused;
 
     int applied = 0;
     int failed = 0;
@@ -143,21 +152,14 @@ int lg_daemon_pass(lg_daemon_state *st)
         const lg_curve *curve = lg_config_curve(st->config, c);
 
         if (do_apply) {
-            int duty = 0;
-            if (failsafe) {
-                /* Failsafe overrides everything, including a disabled curve. */
-                duty = 100;
-            } else {
-                if (curve == NULL || !curve->enabled) {
-                    continue;
-                }
-                if (isnan(snap->cpu_temp)) {
-                    continue;
-                }
-                duty = lg_curve_duty_points(curve->points, curve->npoints, snap->cpu_temp);
-                if (curve->min_duty > duty) {
-                    duty = curve->min_duty;
-                }
+            /*
+             * Same resolver the interface uses, so a machine under the daemon
+             * cools identically to one under the window.
+             */
+            int duty;
+            if (!lg_curve_resolve_duty(curve, !st->config->auto_apply, failsafe,
+                                       snap->cpu_temp, &duty)) {
+                continue;
             }
 
             char err[192] = {0};

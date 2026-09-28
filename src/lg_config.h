@@ -96,6 +96,9 @@ bool lg_config_save(const lg_config *cfg);
  */
 const lg_curve *lg_config_curve(lg_config *cfg, const lg_control *ctl);
 
+/* The same entry, for callers that edit it. Creates it if absent. */
+lg_curve *lg_config_curve_mut(lg_config *cfg, const lg_control *ctl);
+
 /* Find an existing entry by key, or NULL. */
 lg_curve_entry *lg_config_find(lg_config *cfg, const char *key);
 

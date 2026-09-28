@@ -48,6 +48,26 @@ typedef struct {
     bool enabled;
     int min_duty; /* safety floor in percent; 0 means no floor */
 
+    /*
+     * Fixed duty used in manual mode, 0..100. Only read when the application is
+     * in manual rather than automatic mode, where the fan holds this speed
+     * regardless of temperature instead of following the points.
+     *
+     * It lives beside the curve rather than beside the control because the
+     * curve is already the per-control policy object: it carries the same
+     * enable flag, the same floor and the same source, and putting the manual
+     * duty anywhere else would mean a second parallel structure that has to be
+     * migrated, saved and reset alongside this one.
+     *
+     * -1 means no manual speed has ever been set for this control. That is not
+     * the same as 0, and it is deliberately distinct from the initial value
+     * too: a control the user never touched should be left alone in manual mode
+     * rather than having a speed invented for it, because inventing one means
+     * either a fan stopped or a fan at full speed, on hardware nobody has
+     * looked at. The control falls back to whatever the curve would have done.
+     */
+    int manual_duty;
+
     /* Sensor key this curve evaluates against. Empty selects the default
      * (CPU package) source. */
     char source[128];
@@ -84,3 +104,31 @@ int lg_curve_duty(const lg_curve *curve, double temp_c);
 int lg_curve_duty_points(const lg_point *points, size_t n, double temp_c);
 
 #endif /* LG_CURVE_H */
+
+/*
+ * Decide the duty one control should be written at this cycle.
+ *
+ * Shared by the interface and the headless daemon on purpose. The two are
+ * separate programs that both own the fans at different times, and if they
+ * each decided what a mode meant they would eventually disagree -- so the
+ * machine's cooling would depend on whether a window happened to be open.
+ *
+ * Three inputs decide it, in this order:
+ *   1. Failsafe, above the configured threshold, is always 100%. It is not
+ *      gated on the mode, on auto_apply, or on the curve being enabled,
+ *      because the one thing that must not be disabled is the thing that
+ *      stops the machine cooking.
+ *   2. In automatic mode the curve is evaluated against the source
+ *      temperature, and a NaN source means no write rather than a guess.
+ *   3. In manual mode the control holds its own fixed duty, so it does not
+ *      move with temperature at all.
+ *
+ * min_duty applies in both modes. It is a floor the user set to keep a fan
+ * turning, and honouring it in manual mode means a stray zero cannot stop a
+ * header; ignoring it would let the one mode with no curve in it become the
+ * one mode that can stall a fan.
+ *
+ * Returns false when the caller should not write this control at all.
+ */
+bool lg_curve_resolve_duty(const lg_curve *curve, bool manual_mode, bool failsafe,
+                           double source_temp, int *out_duty);
