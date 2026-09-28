@@ -10,6 +10,7 @@
 #endif
 
 #include <glib-unix.h>
+#include <math.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,7 @@
 #include "lg_control.h"
 #include "lg_dump.h"
 #include "lg_hwmon.h"
+#include "lg_daemon.h"
 #include "lg_ui.h"
 
 #ifndef LG_VERSION
@@ -43,6 +45,7 @@ static void usage(const char *argv0)
            "  --no-apply         start with automatic curve application off\n"
            "  --theme MODE       force the colour scheme: light or dark\n"
            "  --screenshot PATH  render the window to a PNG and exit\n"
+           "  --daemon           apply curves with no window, until stopped\n"
            "  --version          print version and exit\n"
            "  --help             print this help and exit\n",
            argv0);
@@ -171,6 +174,7 @@ int main(int argc, char **argv)
     bool no_liquidctl = false;
     const char *screenshot = NULL;
     const char *theme = NULL;
+    bool daemon = false;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--dump-detect") == 0) {
@@ -183,6 +187,8 @@ int main(int argc, char **argv)
             no_apply = true;
         } else if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
             screenshot = argv[++i];
+        } else if (strcmp(argv[i], "--daemon") == 0) {
+            daemon = true;
         } else if (strcmp(argv[i], "--theme") == 0 && i + 1 < argc) {
             theme = argv[++i];
         } else if (strcmp(argv[i], "--hwmon-root") == 0 && i + 1 < argc) {
@@ -236,6 +242,29 @@ int main(int argc, char **argv)
             fputs(json, stdout);
             free(json);
         }
+        return 0;
+    }
+
+    /*
+     * Headless curve application, before any GTK call.
+     *
+     * This has to come before gtk_init_check() deliberately: the point is to run
+     * on a machine with no session, where initialising GTK would either fail or
+     * insist on a display it will never get. The interface can be opened later
+     * on the same config, and the daemon owns the curves until it stops.
+     */
+    if (daemon) {
+        lg_daemon_state st;
+        lg_daemon_state_init(&st, &config);
+        st.root_override = opts.root;
+        st.no_liquidctl = opts.use_liquidctl ? false : true;
+        lg_daemon_install_signal_handlers();
+        printf("liquidgui %s --daemon, source %s\n", LG_VERSION,
+               isnan(snap.cpu_temp) ? "unavailable" : "cpu");
+        fflush(stdout);
+        lg_daemon_run(&st);
+        printf("stopped after %lu pass(es)\n", st.passes);
+        lg_config_save(&config);
         return 0;
     }
 

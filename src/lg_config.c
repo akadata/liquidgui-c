@@ -456,10 +456,23 @@ static void load_legacy_flat(const lg_json *root, lg_config *cfg, const lg_snaps
     }
 }
 
+/* An empty snapshot, so migration has something safe to resolve against. */
+static const lg_snapshot k_empty_snapshot;
+
 bool lg_config_load(lg_config *cfg, const lg_snapshot *snap, const char *hwmon_root)
 {
     if (cfg == NULL) {
         return false;
+    }
+    /*
+     * snap is only consulted when a legacy key needs resolving to a stable one,
+     * so a NULL there is harmless rather than fatal. Checking it here means a
+     * caller without a discovery does not have to know that, and cannot reach a
+     * dereference partway through migration depending on whether the config
+     * happened to contain a legacy key.
+     */
+    if (snap == NULL) {
+        snap = &k_empty_snapshot;
     }
     lg_config_init(cfg);
 

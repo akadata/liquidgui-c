@@ -61,6 +61,7 @@ make
 sudo make install           # installs /usr/bin/liquidgui
 sudo make install-helper    # installs the setuid helper and the udev rule
 sudo make install-driver    # installs the NCT6687 hwmon driver via DKMS
+sudo make install-service  # installs the unattended daemon unit (not enabled)
 ```
 
 `PREFIX` defaults to `/usr`. To install elsewhere, for example under
@@ -100,6 +101,55 @@ revision in `driver/REVISION`. It is a separately compiled kernel module under
 GPL-2.0-or-later, not linked into this MIT-licensed binary. `make -C driver
 check` runs the driver's own tests, including a PWM write and readback that
 restores the original value.
+
+## Unattended control
+
+The interface applies curves, but only while its window is open. On a headless
+machine, or simply when nobody is logged in, the fan duties in sysfs were left
+at whatever the last window happened to write.
+
+`--daemon` is the same loop with no window: same discovery, same curve
+evaluation, same write verification, same failsafe, same stall detection, same
+restore-on-exit. It runs before any GTK call, so it needs no display at all.
+
+```bash
+liquidgui --daemon
+```
+
+`make install-service` installs `liquidgui.service`, which runs it at boot. It
+is **installed but not enabled** — whether a machine should have its cooling
+driven from boot is the operator's decision, and an install that silently took
+over the cooling would be a worse surprise than one that asks.
+
+```bash
+sudo systemctl enable --now liquidgui
+systemctl status liquidgui
+journalctl -u liquidgui -f
+```
+
+Do not run the daemon and the window at the same time. Both apply the same
+config file and neither knows about the other, so they would overwrite each
+other's duties; the window would show state the daemon is not maintaining.
+
+On stop — `SIGTERM` from systemd, `SIGINT`, or `SIGHUP` — every control the
+daemon was driving goes to 100% before exit. An over-speed fan is reversible and
+a stopped one is not, and there is no longer a program running to manage the
+curve. Handback to the board's own curve is deliberately not attempted for the
+reason described under **Safety**.
+
+### Verifying it is working
+
+`--dump-detect` includes the rendered `display` and `range_display` strings, so a
+display fault is visible from the command line rather than only in the window.
+To watch the ramp directly:
+
+```bash
+watch -n3 'cat /sys/class/hwmon/hwmon*/pwm1'
+```
+
+A flat 255 means nothing is applying the curves. Check, in order: is the service
+active, is `auto_apply` true in the config, and is each curve enabled with points
+that actually vary.
 
 ## Privileged writes
 

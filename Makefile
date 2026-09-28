@@ -10,6 +10,7 @@ PREFIX      ?= /usr
 BINDIR      ?= $(PREFIX)/bin
 LIBEXECDIR  ?= $(PREFIX)/libexec/liquidgui
 UDEV_DIR   ?= /etc/udev/rules.d
+UNIT_DIR   ?= /etc/systemd/system
 DESTDIR    ?=
 
 # The Nuvoton Super-I/O driver. liquidgui reads and controls these chips through
@@ -54,7 +55,8 @@ CORE_SRC = \
 	src/lg_control.c \
 	src/lg_config.c \
 	src/lg_theme.c \
-	src/lg_dump.c
+	src/lg_dump.c \
+	src/lg_daemon.c
 
 UI_SRC = \
 	src/lg_ui.c \
@@ -76,7 +78,7 @@ TEST_BINS = \
 	tests/test_config
 
 .PHONY: all test check-parity sanitize install install-helper install-driver \
-	driver-status uninstall uninstall-driver clean run dump help
+	install-service driver-status uninstall uninstall-driver clean run dump help
 
 all: $(BIN)
 
@@ -165,6 +167,29 @@ install-helper: $(HELPER_BIN)
 		udevadm trigger 2>/dev/null || true; \
 	fi
 
+# ------------------------------------------------------------------ service
+#
+# A fan curve that only runs while a window is open is not unattended control.
+# The unit applies the same curves from the same config with no display, which
+# is what a headless machine or a moment with no session needs.
+#
+# The unit is installed but NOT enabled: whether a machine should have its fans
+# driven at boot is the operator's decision, not the packaging's. An
+# install that silently started taking over the cooling is a worse surprise
+# than one that leaves it to "systemctl enable".
+.PHONY: install-service
+install-service:
+	@install -Dm644 etc/systemd/liquidgui.service $(DESTDIR)$(UNIT_DIR)/liquidgui.service
+	@if [ -z "$(DESTDIR)" ]; then \
+		systemctl daemon-reload 2>/dev/null || true; \
+		echo "installed $(UNIT_DIR)/liquidgui.service"; \
+		echo "  start it now with:  sudo systemctl start liquidgui"; \
+		echo "  start it at boot:  sudo systemctl enable --now liquidgui"; \
+		echo "  it is installed but NOT enabled, so nothing has changed yet"; \
+	else \
+		echo "packaging stage: staged the unit without touching systemd"; \
+	fi
+
 # ------------------------------------------------------------------ driver
 #
 # liquidgui is not complete without this: the Nuvoton NCT6687/NCT6687D on these
@@ -240,6 +265,11 @@ uninstall-driver:
 	@modprobe -r $(DRIVER_MODULE) 2>/dev/null || true
 
 uninstall: uninstall-driver
+	@if [ -z "$(DESTDIR)" ]; then \
+		systemctl disable --now liquidgui.service 2>/dev/null || true; \
+		systemctl daemon-reload 2>/dev/null || true; \
+	fi
+	rm -f $(DESTDIR)$(UNIT_DIR)/liquidgui.service
 	rm -f $(DESTDIR)$(BINDIR)/$(BIN)
 	rm -f $(DESTDIR)$(LIBEXECDIR)/$(HELPER)
 	rm -f $(DESTDIR)$(UDEV_DIR)/60-liquidctl.rules
@@ -260,6 +290,7 @@ help:
 	  '  sudo make install    install the binary' \
 	  '  sudo make install-helper  install the setuid helper and udev rule' \
 	  '  sudo make install-driver  install the NCT6687 hwmon driver via DKMS' \
+	  '  sudo make install-service install the unattended daemon unit (not enabled)' \
 	  '  make driver-status   report driver installation and hwmon devices' \
 	  '  sudo make uninstall  remove everything this Makefile installed' \
 	  '  sudo make uninstall-driver  remove only the driver'

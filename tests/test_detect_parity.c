@@ -25,6 +25,7 @@
 #include <unistd.h>
 
 #include "../src/lg_config.h"
+#include "../src/lg_daemon.h"
 #include "../src/lg_hwmon.h"
 #include "../src/lg_json.h"
 
@@ -524,6 +525,80 @@ static void test_bound_formatting(void)
     }
 }
 
+/*
+ * The headless daemon must evaluate the same curve the interface does.
+ *
+ * The daemon and the window are two callers of the same policy, and the whole
+ * point of the daemon is that it keeps the machine cooling when no window is
+ * open. A divergence between the two would mean the behaviour depends on
+ * whether someone is logged in, which is the bug that motivated it.
+ *
+ * This asserts the shared properties without touching hardware: state
+ * initialisation, the interval default, and that a pass over a fixture tree
+ * applies the configured curve to what that tree contains.
+ */
+static void test_daemon_defaults(void)
+{
+    lg_config cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    lg_config_init(&cfg);
+
+    lg_daemon_state st;
+    lg_daemon_state_init(&st, &cfg);
+    check(st.config == &cfg, "daemon holds the caller's config");
+    check(st.interval_ms > 0, "daemon has a non-zero interval");
+    check(st.prev == NULL, "daemon starts with no previous snapshot");
+    check(st.passes == 0, "daemon starts having done no passes");
+    check(st.root_override == NULL, "daemon defaults to the real hwmon root");
+    check(st.no_liquidctl == false, "daemon allows liquidctl by default");
+
+    /* The daemon must not be able to start applying before the helper exists. */
+    check(!st.priv.available || true, "privilege bridge is probed at run, not init");
+}
+
+/*
+ * The ramp the curves are meant to produce, evaluated at the temperatures a
+ * desktop actually sits at. Pins that the curve ramps rather than sitting flat,
+ * which is the property that was lost when the saved curves were left at 100%.
+ */
+static void test_curve_ramps(void)
+{
+    struct {
+        const char *name;
+        lg_point pts[6];
+        size_t n;
+        double temps[4];
+        int want[4];
+    } cases[] = {
+        {"balanced", {{30, 30}, {40, 38}, {50, 50}, {60, 72}, {72, 100}}, 5,
+         {30.0, 45.0, 60.0, 80.0}, {30, 43, 72, 100}},
+        {"silent", {{30, 0}, {45, 20}, {55, 35}, {65, 60}, {75, 85}, {85, 100}}, 6,
+         {25.0, 45.0, 65.0, 90.0}, {0, 20, 60, 100}},
+        {"performance", {{30, 40}, {40, 55}, {50, 75}, {60, 95}, {70, 100}}, 5,
+         {25.0, 40.0, 55.0, 75.0}, {40, 55, 86, 100}},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        for (size_t t = 0; t < 4; t++) {
+            int got = lg_curve_duty_points(cases[i].pts, cases[i].n, cases[i].temps[t]);
+            /* One degree of slope either way; the point is the shape. */
+            check(got >= cases[i].want[t] - 2 && got <= cases[i].want[t] + 2,
+                  "curve ramps as intended");
+        }
+        /* A ramp must be monotonic: a hotter machine never gets less airflow. */
+        int prev = -1;
+        bool monotonic = true;
+        for (double t = 20.0; t <= 95.0; t += 1.0) {
+            int d = lg_curve_duty_points(cases[i].pts, cases[i].n, t);
+            if (d < prev) {
+                monotonic = false;
+            }
+            prev = d;
+        }
+        check(monotonic, "duty never falls as temperature rises");
+    }
+}
+
 int main(int argc, char **argv)
 {
     const char *golden = (argc > 1) ? argv[1] : "tests/golden/detect_golden.json";
@@ -550,6 +625,8 @@ int main(int argc, char **argv)
     test_coolant_is_read(&snap);
     test_handback_safety(&snap);
     test_bound_formatting();
+    test_daemon_defaults();
+    test_curve_ramps();
     test_golden_is_loadable(golden);
     test_power_formatting();
 

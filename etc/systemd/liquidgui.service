@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Applies the fan curves with no window and no user session.
+#
+# The interface applies curves too, but only while it is open. On a machine
+# where nobody is logged in -- a server, a headless install, or just a moment
+# with no desktop running -- the fan duties in sysfs were left at whatever the
+# last window happened to write. This unit is what makes the control
+# unattended, and it is the only thing standing between a rebooted headless
+# machine and fans sitting wherever they were left.
+#
+# It applies the same curves from the same configuration file as the
+# interface, so opening the window shows the state this is maintaining rather
+# than competing with it. Do not run both: they would each write duties, and the
+# windowed one would not know about the daemon.
+#
+# The driver is a hard dependency. Without nct6687 there is nothing to control,
+# so the unit is ordered after it and will not start if it is missing.
+
+[Unit]
+Description=liquidgui fan curve daemon
+
+# The Super-I/O driver exposes the headers this controls. nct6687d is installed
+# by liquidgui's own "make install-driver", which registers it with DKMS, so
+# ordering against the module name is enough and survives a kernel upgrade.
+After=nct6687.service
+Wants=nct6687.service
+
+# A cooling control should not be brought up before the hardware is.
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/liquidgui --daemon
+
+# Restore-on-exit writes full speed to every control this ran, so a stop leaves
+# the machine cooling rather than at the last curve point.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# The daemon needs the setuid helper for privileged PWM writes and nothing else.
+# It writes no file of its own, so the filesystem can stay read-only.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+# It does not need the network, and denying it is cheaper than auditing why.
+PrivateNetwork=yes
+
+# The only privileged access is the helper's setuid binary, so the whole
+# capability set can be dropped.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# A fan controller that cannot be stopped is worse than one that can be fixed.
+Restart=on-failure
+RestartSec=5
+
+# Logging to the journal keeps the history of applied duties and any channel
+# that stopped responding, which is the evidence needed when a fan misbehaves.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=liquidgui
+
+[Install]
+WantedBy=multi-user.target
