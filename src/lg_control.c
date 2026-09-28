@@ -20,7 +20,16 @@
 
 #include "lg_liquidctl.h"
 
-#define LG_HELPER_FALLBACK "/usr/local/bin/lg-helper"
+/*
+ * Install locations tried in order. The /usr/local entries cover installs made
+ * before the prefix moved to /usr, so an existing setuid helper keeps working
+ * without being reinstalled.
+ */
+static const char *const g_helper_candidates[] = {
+    LG_HELPER_PATH,
+    "/usr/local/libexec/liquidgui/lg-helper",
+    "/usr/local/bin/lg-helper",
+};
 
 int lg_control_duty_to_raw(const lg_control *ctl, int duty_percent)
 {
@@ -92,14 +101,11 @@ void lg_priv_detect(lg_priv *priv)
         return;
     }
 
-    if (is_setuid_executable(priv->helper_path)) {
-        priv->mode = LG_PRIV_HELPER;
-        priv->available = true;
-        snprintf(priv->detail, sizeof(priv->detail), "privileged helper");
-        return;
-    }
-    if (is_setuid_executable(LG_HELPER_FALLBACK)) {
-        snprintf(priv->helper_path, sizeof(priv->helper_path), "%s", LG_HELPER_FALLBACK);
+    for (size_t i = 0; i < sizeof(g_helper_candidates) / sizeof(g_helper_candidates[0]); i++) {
+        if (!is_setuid_executable(g_helper_candidates[i])) {
+            continue;
+        }
+        snprintf(priv->helper_path, sizeof(priv->helper_path), "%s", g_helper_candidates[i]);
         priv->mode = LG_PRIV_HELPER;
         priv->available = true;
         snprintf(priv->detail, sizeof(priv->detail), "privileged helper");

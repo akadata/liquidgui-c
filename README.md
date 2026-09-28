@@ -5,8 +5,10 @@ sensors the kernel exposes under `/sys/class/hwmon`, drives AIO coolers and
 motherboard fan headers from a shared curve editor, and refuses to leave your
 fans in an unsafe state when it exits.
 
-It replaces the earlier Python/Tk implementation, which is preserved under
-`tools/legacy/` for reference.
+This repository is self-contained: C, a Makefile, and test data. There is no
+Python in the build or the test suite. It replaces the earlier Python/Tk
+implementation, which lives in a separate repository and is not vendored here —
+see [Provenance](#provenance).
 
 ![LiquidGUI](docs/screenshot.png)
 
@@ -47,8 +49,12 @@ Requires GTK3 and a C11 compiler. On Arch: `pacman -S gtk3`.
 
 ```bash
 make
-sudo make install
+sudo make install           # installs /usr/bin/liquidgui
+sudo make install-helper    # installs the setuid helper and the udev rule
 ```
+
+`PREFIX` defaults to `/usr`. To install elsewhere, for example under
+`/usr/local`, pass `PREFIX=/usr/local` to both targets.
 
 ## Privileged writes
 
@@ -173,9 +179,15 @@ possible: `lg_py_round` reproduces Python's round-half-to-even (C's `round` is
 half-away-from-zero and would differ by a whole duty step), and the Bezier
 control points are held in `double` because the tangent offsets are fractional.
 
-`make check-parity` prints the discovery differences for review. They are
-intended: stable keys, the AIO surfaced as hwmon controls, dead channels
-filtered, voltages newly read.
+`make check-parity` runs the same discovery assertions on their own.
+
+The discovery differences from the previous implementation are intended, and are
+asserted rather than merely reviewed: stable keys with no sysfs path, the AIO
+surfaced through hwmon and never through two paths at once, dead channels
+filtered, voltages newly read, and the read-only secondary Super-I/O excluded
+from the control list. Hardware-specific expectations are only asserted when
+that hardware is present, so the suite stays green on a machine with no fan
+headers.
 
 ## Board support
 
@@ -205,3 +217,14 @@ into OpenRC should you wish.
 ## Licence
 
 MIT. See `LICENSE`.
+
+## Provenance
+
+`tests/golden/` was captured from the previous Python implementation before this
+rewrite began, and is the contract the C code is held to. The generator script
+is not vendored here because it needs the Python tree; it lives alongside the
+old implementation. To regenerate the goldens, check that repository out beside
+this one and run its generator against this tree.
+
+The golden files themselves are JSON fixtures, not Python, and are committed so
+that `make test` is self-contained.

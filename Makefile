@@ -3,7 +3,10 @@
 # (C) 2026 AKADATA LIMITED - Andrew Smalley
 # Released under the MIT License.
 
-PREFIX      ?= /usr/local
+# The binary lives in /usr/bin: it is a packaged application, not a local
+# addition, and this matches the split the wider Saphira tooling expects.
+# Override PREFIX to install elsewhere, e.g. PREFIX=/usr/local.
+PREFIX      ?= /usr
 BINDIR      ?= $(PREFIX)/bin
 LIBEXECDIR  ?= $(PREFIX)/libexec/liquidgui
 UDEV_DIR   ?= /etc/udev/rules.d
@@ -54,6 +57,7 @@ HELPER_BIN = helper/$(HELPER)
 TEST_BINS = \
 	tests/test_json \
 	tests/test_curve_parity \
+	tests/test_detect_parity \
 	tests/test_helper_allowlist \
 	tests/test_config
 
@@ -83,6 +87,9 @@ tests/test_json: tests/test_json.c src/lg_json.o
 tests/test_curve_parity: tests/test_curve_parity.c $(TEST_OBJ)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
 
+tests/test_detect_parity: tests/test_detect_parity.c $(TEST_OBJ)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
+
 tests/test_helper_allowlist: tests/test_helper_allowlist.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
@@ -94,20 +101,18 @@ test: $(TEST_BINS)
 	@./tests/test_json
 	@echo "== curve parity against the legacy Python =="
 	@./tests/test_curve_parity tests/golden/curve_golden.json
+	@echo "== discovery invariants =="
+	@./tests/test_detect_parity tests/golden/detect_golden.json
 	@echo "== helper allowlist =="
 	@./tests/test_helper_allowlist
 	@echo "== configuration and key migration =="
 	@./tests/test_config
 
-# Discovery is compared against tests/golden/detect_golden.json. The two
-# implementations are expected to differ: the C side adds the AIO as hwmon
-# controls, uses stable keys, and filters dead sensors. check-parity prints the
-# diff so the difference is reviewed rather than assumed.
-check-parity: $(BIN)
-	@echo "== discovery comparison (differences are expected and reviewed) =="
-	@./$(BIN) --dump-detect --no-liquidctl > /tmp/liquidgui-detect-new.json
-	@python3 tools/compare_detect.py tests/golden/detect_golden.json \
-		/tmp/liquidgui-detect-new.json || true
+# The discovery invariants are asserted by tests/test_detect_parity, which runs
+# as part of `make test`. This target just runs that one file on its own, for
+# quick iteration while changing discovery.
+check-parity: tests/test_detect_parity
+	@./tests/test_detect_parity tests/golden/detect_golden.json
 
 sanitize:
 	$(MAKE) clean
@@ -154,7 +159,7 @@ help:
 	  'Targets:' \
 	  '  make                 build the liquidgui binary' \
 	  '  make test            build and run the unit and parity tests' \
-	  '  make check-parity    diff discovery against the legacy golden file' \
+	  '  make check-parity    run the discovery invariant assertions' \
 	  '  make sanitize        run the tests under ASan and UBSan' \
 	  '  make run             build and launch the interface' \
 	  '  make dump            print discovered sensors and controls as JSON' \

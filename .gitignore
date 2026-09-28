@@ -214,3 +214,4 @@ __marimo__/
 /tests/test_helper_allowlist
 /tests/test_config
 /tests/test_json
+/tests/test_detect_parity

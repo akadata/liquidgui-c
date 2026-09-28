@@ -30,9 +30,13 @@
 
 #include "lg_model.h"
 
-/* Where the privileged helper lives, and how to fall back when it is absent. */
+/*
+ * Where the privileged helper lives. Must match LIBEXECDIR in the Makefile, and
+ * the alternative below is kept for installs made before the prefix moved to
+ * /usr, so an existing setuid helper keeps working.
+ */
 #define LG_HELPER_NAME "lg-helper"
-#define LG_HELPER_PATH "/usr/local/libexec/liquidgui/lg-helper"
+#define LG_HELPER_PATH "/usr/libexec/liquidgui/lg-helper"
 
 typedef enum {
     LG_PRIV_HELPER = 0, /* setuid helper, the normal path */
