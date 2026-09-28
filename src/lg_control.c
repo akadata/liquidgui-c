@@ -429,6 +429,17 @@ bool lg_control_handback(const lg_priv *priv, const lg_control *ctl, char *err, 
     if (ctl == NULL || !ctl->has_enable || ctl->pwm_enable_path[0] == '\0') {
         return true; /* nothing to hand back */
     }
+    /*
+     * Refuse where pwm_enable=2 is not known to mean "the controller decides".
+     * On nzxt_kraken3 it zeroes both outputs and stops the fan, so the caller
+     * falls back to full speed for this control.
+     */
+    if (!ctl->handback_safe) {
+        set_err(err, cap,
+                "%s: pwm_enable=2 is not safe on this driver, leaving it at full speed",
+                ctl->label);
+        return false;
+    }
     if (priv == NULL || !priv->available) {
         set_err(err, cap, "no privileged write mechanism is available");
         return false;
@@ -495,9 +506,29 @@ bool lg_control_handback(const lg_priv *priv, const lg_control *ctl, char *err, 
     }
 }
 
+bool lg_control_write_once(const lg_priv *priv, const lg_control *ctl, int duty, char *err,
+                           size_t cap)
+{
+    if (err != NULL && cap > 0) {
+        err[0] = '\0';
+    }
+    if (ctl == NULL) {
+        set_err(err, cap, "no control selected");
+        return false;
+    }
+    if (priv == NULL || !priv->available) {
+        set_err(err, cap, "no privileged write mechanism is available");
+        return false;
+    }
+    if (ctl->kind == LG_CTRL_LIQUIDCTL) {
+        return lg_liquidctl_set("liquidctl", ctl->liquidctl_name, duty, err, cap);
+    }
+    return apply_hwmon(priv, ctl, lg_control_duty_to_raw(ctl, duty), err, cap);
+}
+
 bool lg_control_full_speed(const lg_priv *priv, const lg_control *ctl, char *err, size_t cap)
 {
-    return lg_control_apply(priv, ctl, 100, err, cap);
+    return lg_control_write_once(priv, ctl, 100, err, cap);
 }
 
 void lg_control_refresh(lg_control *ctl)

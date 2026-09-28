@@ -31,7 +31,14 @@ void lg_config_init(lg_config *cfg)
     memset(cfg, 0, sizeof(*cfg));
     cfg->auto_apply = true;
     cfg->paused = false;
-    cfg->exit_mode = LG_EXIT_HANDBACK;
+    /*
+     * Full speed on exit, not handback. Handback means writing pwm_enable=2,
+     * which is documented as "the controller runs its own curve" on nct6687 but
+     * was measured on nzxt_kraken3 to zero both outputs and stop the radiator
+     * fan. A stopped fan is a worse outcome than full speed, so full speed is
+     * the default and handback has to be chosen deliberately.
+     */
+    cfg->exit_mode = LG_EXIT_RESTORE_SPEED;
     cfg->failsafe_temp = 90;
     cfg->stall_duty = 20;
     cfg->stall_samples = 3;

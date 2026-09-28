@@ -111,6 +111,17 @@ bool lg_control_apply(const lg_priv *priv, const lg_control *ctl, int duty, char
 /* Hand a control back to the controller's own automatic curve. */
 bool lg_control_handback(const lg_priv *priv, const lg_control *ctl, char *err, size_t err_cap);
 
+/*
+ * Write a duty once, with no readback verification and no retries.
+ *
+ * Used by restore-on-exit. Restoring is a safety action, not a tune: retrying a
+ * channel the controller refuses four times, at 250 ms a try, added seconds to
+ * every shutdown, and verifying the result gates the restore on a channel that
+ * will never accept a write.
+ */
+bool lg_control_write_once(const lg_priv *priv, const lg_control *ctl, int duty, char *err,
+                           size_t err_cap);
+
 /* Write 100% to the control, used by the failsafe and restore-on-exit. */
 bool lg_control_full_speed(const lg_priv *priv, const lg_control *ctl, char *err, size_t err_cap);
 

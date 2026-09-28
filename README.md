@@ -108,10 +108,23 @@ selected curve, `Space` pause writes, `Ctrl+T` toggle theme.
   full speed, hand back to the board's own curve, or leave as-is. `SIGKILL`
   cannot be caught and is the one case left to you.
 
-  Handing back restores the `pwm_enable` mode recorded at startup rather than
-  assuming one. A recorded `0` is written as `2` ("the controller runs its own
-  curve") because the driver rejects `0` on write; both mean the same thing, and
-  `2` is the ABI value.
+  **Full speed is the default, not handback.** Handing back means writing
+  `pwm_enable=2`. That is documented on `nct6687` as "the controller runs its
+  own curve", but on `nzxt_kraken3` it was measured to zero both outputs: the
+  radiator fan stopped dead and the pump was left coasting. The value that
+  releases a channel to the firmware is not the value that releases it on every
+  driver, and a stopped fan is a much worse outcome than an over-speed one, so
+  the safe reading is the default and handback has to be chosen deliberately.
+
+  When handback is selected, a control whose driver is not known to handle `2`
+  safely is refused and left at full speed instead, per control. The test suite
+  pins this: `nzxt_kraken3` controls must not be marked safe to hand back.
+
+  Restoring is a single write per control with no readback verification and no
+  retries. Verifying the result would gate the restore on a channel that will
+  never accept a write, and retrying four times at 250 ms per attempt added
+  seconds to every shutdown. A measured `SIGTERM` to full speed is now about
+  0.3 s.
 
   Shutdown is ordered deliberately: the worker is stopped first, so it cannot
   re-apply a curve after the restore. An earlier version did the restore from

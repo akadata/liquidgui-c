@@ -24,6 +24,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "../src/lg_config.h"
 #include "../src/lg_hwmon.h"
 #include "../src/lg_json.h"
 
@@ -251,6 +252,45 @@ static bool chip_present(const char *driver_name)
     return false;
 }
 
+/*
+ * Restore-on-exit must never hand a channel to a driver that stops its fan.
+ *
+ * Writing pwm_enable=2 is documented on nct6687 as "the controller runs its own
+ * curve", but on nzxt_kraken3 it was measured to zero both outputs and stop the
+ * radiator fan. The default exit mode is therefore full speed, and handback is
+ * refused for drivers where it is not known to be safe.
+ */
+static void test_handback_safety(const lg_snapshot *s)
+{
+    lg_config cfg;
+    lg_config_init(&cfg);
+
+    checks++;
+    if (cfg.exit_mode != LG_EXIT_RESTORE_SPEED) {
+        printf("FAIL: default exit mode must be full speed, got %d\n", (int)cfg.exit_mode);
+        failures++;
+    }
+
+    for (size_t i = 0; i < s->ncontrols; i++) {
+        const lg_control *c = &s->controls[i];
+        if (strcmp(c->driver, "nzxt_kraken3") != 0) {
+            continue;
+        }
+        checks++;
+        if (c->handback_safe) {
+            printf("FAIL: %s is marked safe to hand back, but pwm_enable=2 stops its fan\n",
+                   c->label);
+            failures++;
+        }
+    }
+
+    /* The nct6687 headers may be handed back: the driver documents 2 as auto. */
+    const lg_control *hdr = find_driver(s, "nct6687");
+    if (hdr != NULL) {
+        check(hdr->handback_safe, "nct6687 headers may be handed back to the controller");
+    }
+}
+
 static void test_secondary_chip_is_not_a_control(const lg_snapshot *s)
 {
     /*
@@ -410,6 +450,7 @@ int main(int argc, char **argv)
     test_nct6687_headers(&snap);
     test_secondary_chip_is_not_a_control(&snap);
     test_coolant_is_read(&snap);
+    test_handback_safety(&snap);
     test_golden_is_loadable(golden);
     test_power_formatting();
 

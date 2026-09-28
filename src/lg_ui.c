@@ -967,8 +967,15 @@ void lg_ui_restore_on_exit(lg_ui *ui)
         }
         if (ui->cfg.config.exit_mode == LG_EXIT_RESTORE_SPEED) {
             lg_control_full_speed(&ui->priv, c, err, sizeof(err));
-        } else {
-            lg_control_handback(&ui->priv, c, err, sizeof(err));
+            continue;
+        }
+        /*
+         * Hand back, but fall back to full speed per control: some drivers do
+         * not treat pwm_enable=2 as "the controller decides", and there it
+         * stops the fan rather than releasing it.
+         */
+        if (!lg_control_handback(&ui->priv, c, err, sizeof(err))) {
+            lg_control_full_speed(&ui->priv, c, err, sizeof(err));
         }
     }
 }

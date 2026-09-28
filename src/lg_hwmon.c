@@ -569,6 +569,22 @@ static bool driver_enable_resets_pwm(const char *driver)
     return strcmp(driver, "nzxt_kraken3") == 0;
 }
 
+/*
+ * May pwm_enable=2 be written on exit to hand the channel back to the board?
+ *
+ * For nct6687 the value is documented as "the controller runs its own curve",
+ * so it is safe. For nzxt_kraken3 it is not: writing 2 was measured to zero
+ * both outputs, stopping the radiator fan. Unknown drivers are treated as unsafe
+ * because the failure mode is a stopped fan rather than a cosmetic one.
+ */
+static bool driver_handback_safe(const char *driver)
+{
+    if (driver == NULL) {
+        return false;
+    }
+    return strcmp(driver, "nzxt_kraken3") != 0;
+}
+
 static void scan_controls(lg_snapshot *snap, const lg_chip *chip, const lg_snapshot *sensors)
 {
     const char *dir = chip->dir;
@@ -658,6 +674,7 @@ static void scan_controls(lg_snapshot *snap, const lg_chip *chip, const lg_snaps
 
         c->needs_enable_first = driver_needs_enable(chip->driver);
         c->enable_resets_pwm = driver_enable_resets_pwm(chip->driver);
+        c->handback_safe = driver_handback_safe(chip->driver);
         c->is_aio = (strstr(chip->nameval, "kraken") != NULL);
 
         lg_control_make_key(c->key, sizeof(c->key), c->kind, c->driver, c->chip, c->channel);

@@ -121,6 +121,17 @@ typedef struct {
     bool enable_resets_pwm;
 
     /*
+     * Is it safe to return this control to the board's own curve by writing
+     * pwm_enable=2 on exit?
+     *
+     * Not always. On nzxt_kraken3, writing 2 zeroes both outputs: the radiator
+     * fan stopped dead and the pump was left coasting. That was measured, not
+     * assumed, and it is why the default exit mode is full speed rather than
+     * handback. Drivers without a verified meaning for 2 are excluded here.
+     */
+    bool handback_safe;
+
+    /*
      * The raw pwm_enable value seen on the first discovery pass, before this
      * application touched anything. Restoring it on exit leaves the machine
      * exactly as it was found.
