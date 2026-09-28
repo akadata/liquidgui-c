@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "../src/lg_config.h"
@@ -83,6 +84,74 @@ static void build_fixture(lg_snapshot *s)
 }
 
 /* Write a file into the temporary config home. */
+/* --------------------------------------------------------------- fixture fs */
+
+/*
+ * Migration validates legacy keys against a real directory tree, so the test
+ * builds one instead of relying on whatever hardware the runner happens to
+ * have. It mirrors the situation this test exists for: a writable control chip,
+ * a second chip with read-only pwm, and a hub with no pwm at all.
+ */
+static char g_fixture[256];
+
+static void fixture_write(const char *rel, int mode)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", g_fixture, rel);
+    FILE *f = fopen(path, "w");
+    if (f != NULL) {
+        fputs("128\n", f);
+        fclose(f);
+    }
+    chmod(path, (mode_t)mode);
+}
+
+static void build_fixture_tree(void)
+{
+    snprintf(g_fixture, sizeof(g_fixture), "/tmp/liquidgui-fixture-%ld", (long)getpid());
+    char cmd[512];
+
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", g_fixture);
+    if (system(cmd) != 0) {
+        /* non-fatal */
+    }
+
+    /* The control chip: writable pwm, which is what makes hwmon12 resolvable. */
+    for (int i = 1; i <= 8; i++) {
+        char rel[64];
+        snprintf(rel, sizeof(rel), "hwmon12/pwm%d", i);
+        char path[512];
+        snprintf(path, sizeof(path), "%s/hwmon12", g_fixture);
+        mkdir(path, 0755);
+        fixture_write(rel, 0644);
+    }
+
+    /* The secondary chip: pwm present but read-only, so it must not resolve. */
+    for (int i = 1; i <= 8; i++) {
+        char rel[64];
+        snprintf(rel, sizeof(rel), "hwmon11/pwm%d", i);
+        char path[512];
+        snprintf(path, sizeof(path), "%s/hwmon11", g_fixture);
+        mkdir(path, 0755);
+        fixture_write(rel, 0444);
+    }
+
+    /* A hub with no pwm whatsoever: hwmon4 gets a temperature node only. */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/hwmon4", g_fixture);
+    mkdir(path, 0755);
+    fixture_write("hwmon4/temp1_input", 0444);
+}
+
+static void remove_fixture_tree(void)
+{
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", g_fixture);
+    if (system(cmd) != 0) {
+        /* non-fatal */
+    }
+}
+
 /* Create the parent directory of path, so the loader can find our fixture. */
 static void ensure_parent(const char *path)
 {
@@ -188,7 +257,7 @@ static void test_migration(const char *config_path)
     build_fixture(&snap);
 
     lg_config cfg;
-    check(lg_config_load(&cfg, &snap), "legacy config loads");
+    check(lg_config_load(&cfg, &snap, g_fixture), "legacy config loads");
 
     check(cfg.migrated > 0, "at least one curve was migrated");
     check(cfg.orphans > 0, "unresolvable entries are counted as orphans");
@@ -242,7 +311,7 @@ static void test_roundtrip(const char *config_path)
     check(lg_config_save(&cfg), "config saves");
 
     lg_config reloaded;
-    check(lg_config_load(&reloaded, &snap), "config reloads");
+    check(lg_config_load(&reloaded, &snap, g_fixture), "config reloads");
     check(reloaded.auto_apply == false, "auto_apply round-trips");
     check(reloaded.failsafe_temp == 85, "failsafe threshold round-trips");
     check(reloaded.nentries == cfg.nentries, "entry count round-trips");
@@ -314,6 +383,8 @@ int main(int argc, char **argv)
     const char *config_path = (argc > 1) ? argv[1] : lg_config_path();
     ensure_parent(config_path);
 
+    build_fixture_tree();
+
     test_keys();
     test_legacy_key_parsing();
     test_migration(config_path);
@@ -322,6 +393,8 @@ int main(int argc, char **argv)
     test_presets();
     test_curve_normalisation();
     unlink(config_path);
+
+    remove_fixture_tree();
 
     printf("%ld checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

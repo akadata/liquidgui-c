@@ -208,7 +208,7 @@ int main(int argc, char **argv)
     }
 
     lg_config config;
-    lg_config_load(&config, &snap);
+    lg_config_load(&config, &snap, opts.root);
     if (no_apply) {
         config.auto_apply = false;
     }

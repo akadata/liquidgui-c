@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "lg_hwmon.h"
 #include "lg_json.h"
 
 #define LG_DIR_MODE 0700
@@ -315,10 +316,22 @@ static const lg_control *resolve_legacy(const char *legacy_key, const lg_snapsho
         return NULL;
     }
 
-    for (size_t i = 0; i < snap->ncontrols; i++) {
-        if (snap->controls[i].pwm_path[0] != '\0' &&
-            strcmp(legacy_key, snap->controls[i].pwm_path) == 0) {
-            return &snap->controls[i];
+    /*
+     * Strategy 1: compare the path portion of the key.
+     *
+     * Legacy keys carry a "hwmon:" prefix, e.g. "hwmon:/sys/class/hwmon/hwmon12/pwm3",
+     * so comparing the whole key against a bare pwm path can never match. An
+     * earlier version did exactly that, which left the exact-path strategy dead
+     * and made every migration depend on probing the live filesystem. Compare
+     * from the leading '/' instead.
+     */
+    const char *key_path = strchr(legacy_key, '/');
+    if (key_path != NULL) {
+        for (size_t i = 0; i < snap->ncontrols; i++) {
+            if (snap->controls[i].pwm_path[0] != '\0' &&
+                strcmp(key_path, snap->controls[i].pwm_path) == 0) {
+                return &snap->controls[i];
+            }
         }
     }
 
@@ -435,12 +448,21 @@ static void load_legacy_flat(const lg_json *root, lg_config *cfg, const lg_snaps
     }
 }
 
-bool lg_config_load(lg_config *cfg, const lg_snapshot *snap)
+bool lg_config_load(lg_config *cfg, const lg_snapshot *snap, const char *hwmon_root)
 {
     if (cfg == NULL) {
         return false;
     }
     lg_config_init(cfg);
+
+    /*
+     * The hwmon root is a parameter rather than an assumption so a test can
+     * point it at a fixture tree. Migration validates legacy keys against the
+     * live tree, and a test that silently depended on the host's hardware would
+     * pass on a developer machine and fail everywhere else.
+     */
+    snprintf(cfg->hwmon_root, sizeof(cfg->hwmon_root), "%s",
+             (hwmon_root != NULL) ? hwmon_root : LG_HWMON_ROOT);
 
     const char *path = lg_config_path();
     char *text = read_whole_file(path, NULL);

@@ -78,8 +78,12 @@ const char *lg_config_legacy_path(void);
  * Load the config, migrating legacy path-based keys onto the stable keys of
  * the supplied snapshot. Unresolvable entries are counted as orphans and
  * listed in cfg->load_report rather than being silently dropped.
+ *
+ * hwmon_root is the sysfs class root that legacy keys are validated against.
+ * Pass the root discovery used, or NULL for /sys/class/hwmon. Tests pass a
+ * fixture tree so migration does not depend on the host's hardware.
  */
-bool lg_config_load(lg_config *cfg, const lg_snapshot *snap);
+bool lg_config_load(lg_config *cfg, const lg_snapshot *snap, const char *hwmon_root);
 
 /* Atomically persist the config. Returns false on write failure. */
 bool lg_config_save(const lg_config *cfg);
