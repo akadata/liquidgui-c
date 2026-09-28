@@ -54,6 +54,8 @@ typedef struct {
     int stall_duty;      /* report a stall at or above this duty, 0 disables */
     int stall_samples;   /* consecutive samples before flagging a stall */
 
+    bool theme_light;    /* false selects the dark palette */
+
     /* hwmon class root, so legacy keys can be validated against the live tree. */
     char hwmon_root[LG_PATH_MAX];
 

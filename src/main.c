@@ -41,6 +41,7 @@ static void usage(const char *argv0)
            "  --hwmon-root DIR   scan an alternative sysfs tree (for testing)\n"
            "  --no-liquidctl     do not probe liquidctl for HID-only AIOs\n"
            "  --no-apply         start with automatic curve application off\n"
+           "  --theme MODE       force the colour scheme: light or dark\n"
            "  --screenshot PATH  render the window to a PNG and exit\n"
            "  --version          print version and exit\n"
            "  --help             print this help and exit\n",
@@ -120,6 +121,19 @@ static gboolean on_slow_tick(gpointer data)
 
 static int run_gui(lg_ui_config *ucfg, const char *screenshot)
 {
+    /*
+     * Ask GTK for a light or dark base theme before any widget exists. Doing it
+     * later forces a theme reload, which rebuilds TreeView headers and loses
+     * them.
+     */
+    {
+        GtkSettings *settings = gtk_settings_get_default();
+        if (settings != NULL) {
+            g_object_set(settings, "gtk-application-prefer-dark-theme",
+                         (ucfg->theme == LG_THEME_DARK), NULL);
+        }
+    }
+
     GtkWidget *window = lg_ui_new(ucfg);
     g_ui = (lg_ui *)g_object_get_data(G_OBJECT(window), "lg-ui");
     if (g_ui == NULL) {
@@ -156,6 +170,7 @@ int main(int argc, char **argv)
     const char *root_override = NULL;
     bool no_liquidctl = false;
     const char *screenshot = NULL;
+    const char *theme = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--dump-detect") == 0) {
@@ -168,6 +183,8 @@ int main(int argc, char **argv)
             no_apply = true;
         } else if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
             screenshot = argv[++i];
+        } else if (strcmp(argv[i], "--theme") == 0 && i + 1 < argc) {
+            theme = argv[++i];
         } else if (strcmp(argv[i], "--hwmon-root") == 0 && i + 1 < argc) {
             root_override = argv[++i];
         } else if (strcmp(argv[i], "--version") == 0) {
@@ -247,9 +264,21 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    if (theme != NULL) {
+        if (strcmp(theme, "light") == 0) {
+            config.theme_light = true;
+        } else if (strcmp(theme, "dark") == 0) {
+            config.theme_light = false;
+        } else {
+            fprintf(stderr, "--theme expects 'light' or 'dark', got '%s'\n", theme);
+            return 2;
+        }
+    }
+
     lg_ui_config ucfg;
     ucfg.config = config;
     ucfg.snapshot = snap;
+    ucfg.theme = config.theme_light ? LG_THEME_LIGHT : LG_THEME_DARK;
 
     int rc = run_gui(&ucfg, screenshot);
     lg_config_save(&config);

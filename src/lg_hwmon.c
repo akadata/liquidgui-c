@@ -379,6 +379,35 @@ static void add_sensor(lg_snapshot *snap, const lg_chip *chip, lg_sensor_class c
     snap->nsensors++;
 }
 
+/*
+ * Does this in*_label describe a current rather than a voltage?
+ *
+ * hwmon overloads in*_input for both, and the label is the only thing that
+ * distinguishes them. Treating every inN as a voltage is why the current tab
+ * stayed empty even on hardware that reports amperage.
+ */
+static bool label_means_current(const char *label)
+{
+    if (label == NULL || label[0] == '\0') {
+        return false;
+    }
+    static const char *const markers[] = {"current", "curr", "+adc", "amp", "iout"};
+    for (size_t i = 0; i < sizeof(markers) / sizeof(markers[0]); i++) {
+        size_t n = strlen(markers[i]);
+        for (const char *p = label; *p != '\0'; p++) {
+            size_t k = 0;
+            while (k < n && p[k] != '\0' &&
+                   tolower((unsigned char)p[k]) == markers[i][k]) {
+                k++;
+            }
+            if (k == n) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 /* Read a *_label file for a channel, if the driver publishes one. */
 static void read_label(const lg_chip *chip, const char *dir, const char *stem, char *out, size_t cap)
 {
@@ -406,6 +435,8 @@ static void scan_sensors(lg_snapshot *snap, const lg_chip *chip, bool secondary)
     } kinds[] = {
         {"temp", "temp", LG_SENSOR_TEMP},
         {"fan", "fan", LG_SENSOR_FAN},
+        /* in*__input covers both voltage and current; the label decides which,
+         * so the class is refined per channel below. */
         {"in", "in", LG_SENSOR_VOLT},
     };
 
@@ -438,20 +469,38 @@ static void scan_sensors(lg_snapshot *snap, const lg_chip *chip, bool secondary)
             snprintf(stem, sizeof(stem), "%s%d", kinds[k].stem, idx);
             read_label(chip, dir, stem, label, sizeof(label));
 
+            lg_sensor_class cls = kinds[k].cls;
+            if (cls == LG_SENSOR_VOLT && label_means_current(label)) {
+                cls = LG_SENSOR_CURRENT;
+            }
+
             long raw = 0;
             if (read_int_file(path, &raw)) {
-                add_sensor(snap, chip, kinds[k].cls, idx, label, path, raw);
+                add_sensor(snap, chip, cls, idx, label, path, raw);
             }
         }
         closedir(d);
     }
 
-    /* Power via the driver-provided power/ subdirectory (energy counters). */
-    char energy[LG_PATH_SCRATCH];
-    snprintf(energy, sizeof(energy), "%s/power/energy1_input", dir);
-    long raw = 0;
-    if (read_int_file(energy, &raw)) {
-        add_sensor(snap, chip, LG_SENSOR_POWER, 1, "Package energy", energy, raw);
+    /*
+     * hwmon's power/ directory is runtime power management on most drivers and
+     * holds no energy counter, so check both the chip directory and the device
+     * subdirectory before concluding there is nothing here.
+     */
+    static const char *const energy_paths[] = {
+        "%s/power/energy1_input",
+        "%s/device/power/energy1_input",
+    };
+    for (size_t e = 0; e < sizeof(energy_paths) / sizeof(energy_paths[0]); e++) {
+        char energy[LG_PATH_SCRATCH];
+        snprintf(energy, sizeof(energy), energy_paths[e], dir);
+        long raw = 0;
+        if (!read_int_file(energy, &raw)) {
+            continue;
+        }
+        add_sensor(snap, chip, LG_SENSOR_POWER, 1, "energy", energy, raw);
+        snprintf(snap->sensors[snap->nsensors - 1].unit, sizeof(snap->sensors[0].unit), "mWh");
+        break;
     }
 
     for (size_t i = first_sensor; i < snap->nsensors; i++) {
@@ -610,6 +659,174 @@ static bool label_contains(const char *hay, const char *needle)
         }
     }
     return false;
+}
+
+/*
+ * Power and energy.
+ *
+ * hwmon's power/ directory is runtime power management (control,
+ * runtime_status, autosuspend_delay_ms) and on this machine holds no energy
+ * counter at all, so scanning power/energy1_input alone always yields nothing.
+ *
+ * The real data on an Intel platform is under /sys/class/powercap. That
+ * directory is a flattened view in which both class directories and RAPL
+ * domains appear at the top level, and nesting differs between kernels, so a
+ * domain is identified by the presence of energy_uj rather than by its name or
+ * depth. Each domain has a name (package-0, core, uncore) and a set of power
+ * constraints naming a long-term, short-term and peak limit.
+ *
+ * The limits are world readable. The energy counter is mode 0400, so an
+ * unprivileged GUI cannot read it, and it is reported as unavailable with a
+ * reason rather than silently as zero.
+ *
+ * (C) 2026 AKADATA LIMITED - Andrew Smalley
+ * Released under the MIT License.
+ */
+
+static void add_power(lg_snapshot *snap, const char *chip, const char *label, const char *sysfs,
+                      double value, const char *unit, const char *note)
+{
+    if (snap->nsensors >= LG_MAX_SENSORS) {
+        return;
+    }
+    lg_sensor *s = &snap->sensors[snap->nsensors];
+    memset(s, 0, sizeof(*s));
+    s->cls = LG_SENSOR_POWER;
+    s->value = value;
+    s->valid = (note == NULL) && isfinite(value);
+    if (note != NULL) {
+        snprintf(s->note, sizeof(s->note), "%s", note);
+    }
+    snprintf(s->chip, sizeof(s->chip), "%.90s", chip);
+    snprintf(s->label, sizeof(s->label), "%.90s", label);
+    snprintf(s->sysfs, sizeof(s->sysfs), "%.230s", sysfs);
+    snprintf(s->unit, sizeof(s->unit), "%.7s", unit);
+    s->index = (int)snap->nsensors;
+    snap->nsensors++;
+}
+
+static bool read_double_file(const char *path, double *out)
+{
+    FILE *f = fopen(path, "re");
+    if (f == NULL) {
+        return false;
+    }
+    char buf[64];
+    bool ok = false;
+    if (fgets(buf, sizeof(buf), f) != NULL) {
+        char *end = NULL;
+        double v = strtod(buf, &end);
+        if (end != buf) {
+            *out = v;
+            ok = true;
+        }
+    }
+    fclose(f);
+    return ok;
+}
+
+static void read_label_file(const char *path, char *out, size_t cap)
+{
+    out[0] = '\0';
+    FILE *f = fopen(path, "re");
+    if (f != NULL) {
+        if (fgets(out, (int)cap, f) == NULL) {
+            out[0] = '\0';
+        }
+        fclose(f);
+    }
+    char *nl = strchr(out, '\n');
+    if (nl != NULL) {
+        *nl = '\0';
+    }
+}
+
+static bool file_exists(const char *path)
+{
+    return access(path, F_OK) == 0;
+}
+
+/* Scan /sys/class/powercap and add each RAPL domain's power limits. */
+static int discover_powercap(lg_snapshot *snap)
+{
+    static const char *const root = "/sys/class/powercap";
+
+    int added = 0;
+    DIR *top = opendir(root);
+    if (top == NULL) {
+        return 0;
+    }
+
+    struct dirent *ent;
+    while ((ent = readdir(top)) != NULL) {
+        if (ent->d_name[0] == '.') {
+            continue;
+        }
+
+        char dom[LG_PATH_SCRATCH];
+        snprintf(dom, sizeof(dom), "%.180s/%.60s", root, ent->d_name);
+
+        char probe[LG_PATH_SCRATCH];
+        snprintf(probe, sizeof(probe), "%.150s/energy_uj", dom);
+        if (!file_exists(probe)) {
+            continue; /* a class directory, not a domain */
+        }
+
+        char chip[LG_NAME_MAX];
+        snprintf(probe, sizeof(probe), "%.150s/name", dom);
+        read_label_file(probe, chip, sizeof(chip));
+        if (chip[0] == '\0') {
+            snprintf(chip, sizeof(chip), "%.60s", ent->d_name);
+        }
+
+        /* Power limits are the actionable figure: long term, short term, peak. */
+        for (int c = 0; c < 16; c++) {
+            /*
+             * Build the constraint number separately. A printf width such as
+             * "%.4d" would zero-pad and ask for constraint_0000_..., which
+             * does not exist, so the digits are formatted plainly into a
+             * bounded buffer and concatenated.
+             */
+            char num[8];
+            snprintf(num, sizeof(num), "%d", c);
+
+            char path[LG_PATH_SCRATCH];
+            double uwatts = 0.0;
+            snprintf(path, sizeof(path), "%.140s/constraint_%s_power_limit_uw", dom, num);
+            if (!read_double_file(path, &uwatts) || uwatts <= 0.0) {
+                continue;
+            }
+
+            char cname[64];
+            snprintf(probe, sizeof(probe), "%.140s/constraint_%s_name", dom, num);
+            read_label_file(probe, cname, sizeof(cname));
+            if (cname[0] == '\0') {
+                snprintf(cname, sizeof(cname), "limit%s", num);
+            }
+
+            char label[LG_NAME_MAX];
+            snprintf(label, sizeof(label), "%.40s %.28s limit", chip, cname);
+            add_power(snap, chip, label, path, uwatts / 1e6, "W", NULL);
+            added++;
+        }
+
+        /* The accumulated energy counter is root-only on this platform. */
+        snprintf(probe, sizeof(probe), "%.150s/energy_uj", dom);
+        char label[LG_NAME_MAX];
+        snprintf(label, sizeof(label), "%.40s energy", chip);
+        if (access(probe, R_OK) != 0) {
+            add_power(snap, chip, label, probe, 0.0, "mWh", "energy counter is root-only");
+        } else {
+            double uj = 0.0;
+            if (read_double_file(probe, &uj)) {
+                add_power(snap, chip, label, probe, uj / 1000.0, "mWh", NULL);
+                added++;
+            }
+        }
+    }
+
+    closedir(top);
+    return added;
 }
 
 void lg_discover_pick_sources(lg_snapshot *snap)
@@ -772,6 +989,9 @@ bool lg_discover(lg_snapshot *snap, const lg_discover_opts *opts)
         }
     }
 
+    /* Power lives outside the hwmon class, so it is a separate pass. */
+    discover_powercap(snap);
+
     lg_discover_pick_sources(snap);
 
     /*
@@ -806,6 +1026,13 @@ void lg_sensor_format(const lg_sensor *s, char *out, size_t cap)
         return;
     }
 
+    /*
+     * Power is reported both as a limit in watts and as an accumulated energy
+     * counter in milliwatt-hours, so the unit is carried per sensor rather than
+     * implied by the class.
+     */
+    const char *unit = (s->unit[0] != '\0') ? s->unit : lg_sensor_class_unit(s->cls);
+
     switch (s->cls) {
     case LG_SENSOR_TEMP:
         snprintf(out, cap, "%.1f C", s->value);
@@ -820,8 +1047,15 @@ void lg_sensor_format(const lg_sensor *s, char *out, size_t cap)
             snprintf(out, cap, "%.2f V", s->value);
         }
         break;
+    case LG_SENSOR_POWER:
+        if (strcmp(unit, "mWh") == 0) {
+            snprintf(out, cap, "%.0f mWh", s->value);
+        } else {
+            snprintf(out, cap, "%.1f %s", s->value, unit);
+        }
+        break;
     default:
-        snprintf(out, cap, "%.3f %s", s->value, lg_sensor_class_unit(s->cls));
+        snprintf(out, cap, "%.3f %s", s->value, unit);
         break;
     }
 }

@@ -54,6 +54,14 @@ typedef struct {
     char label[LG_NAME_MAX];  /* *_label contents, or a synthesised name */
     char sysfs[LG_PATH_MAX];  /* path to the _input node */
     int index;                /* channel number parsed from the filename */
+
+    /*
+     * Display unit. Normally the class unit, but power is reported both as an
+     * instantaneous limit in watts and as an accumulated energy counter in
+     * milliwatt-hours, which share a class but not a unit.
+     */
+    char unit[8];
+
     double value;             /* native units, not normalised */
     double min;
     double max;

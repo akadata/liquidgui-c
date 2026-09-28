@@ -41,6 +41,7 @@ CORE_SRC = \
 	src/lg_liquidctl.c \
 	src/lg_control.c \
 	src/lg_config.c \
+	src/lg_theme.c \
 	src/lg_dump.c
 
 UI_SRC = \
@@ -56,6 +57,7 @@ HELPER_BIN = helper/$(HELPER)
 
 TEST_BINS = \
 	tests/test_json \
+	tests/test_theme \
 	tests/test_curve_parity \
 	tests/test_detect_parity \
 	tests/test_helper_allowlist \
@@ -84,6 +86,9 @@ src/lg_ui.o src/main.o: CFLAGS += $(GTK_CFLAGS)
 tests/test_json: tests/test_json.c src/lg_json.o
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
 
+tests/test_theme: tests/test_theme.c src/lg_theme.o
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
+
 tests/test_curve_parity: tests/test_curve_parity.c $(TEST_OBJ)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
 
@@ -99,6 +104,8 @@ tests/test_config: tests/test_config.c $(TEST_OBJ)
 test: $(TEST_BINS)
 	@echo "== json reader and writer =="
 	@./tests/test_json
+	@echo "== palette contrast =="
+	@./tests/test_theme
 	@echo "== curve parity against the legacy Python =="
 	@./tests/test_curve_parity tests/golden/curve_golden.json
 	@echo "== discovery invariants =="

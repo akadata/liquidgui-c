@@ -13,9 +13,16 @@
 #include "lg_config.h"
 #include "lg_model.h"
 
+/* Which palette the interface uses. */
+typedef enum {
+    LG_THEME_DARK = 0,
+    LG_THEME_LIGHT = 1,
+} lg_theme;
+
 typedef struct {
     lg_config config;
     lg_snapshot snapshot;
+    lg_theme theme;
 } lg_ui_config;
 
 typedef struct lg_ui lg_ui;

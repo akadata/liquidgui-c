@@ -35,6 +35,7 @@ void lg_config_init(lg_config *cfg)
     cfg->failsafe_temp = 90;
     cfg->stall_duty = 20;
     cfg->stall_samples = 3;
+    cfg->theme_light = false;
     snprintf(cfg->hwmon_root, sizeof(cfg->hwmon_root), "%s", "/sys/class/hwmon");
 }
 
@@ -509,6 +510,7 @@ bool lg_config_load(lg_config *cfg, const lg_snapshot *snap, const char *hwmon_r
         cfg->failsafe_temp = (int)lg_json_get_num(settings, "failsafe_temp", cfg->failsafe_temp);
         cfg->stall_duty = (int)lg_json_get_num(settings, "stall_duty", cfg->stall_duty);
         cfg->stall_samples = (int)lg_json_get_num(settings, "stall_samples", cfg->stall_samples);
+        cfg->theme_light = lg_json_get_bool(settings, "theme_light", cfg->theme_light);
     }
 
     const lg_json *curves = lg_json_get(root, "curves");
@@ -653,6 +655,9 @@ char *lg_config_to_json(const lg_config *cfg)
     lg_json_raw(&w, ", ");
     lg_json_key(&w, "stall_samples");
     lg_json_write_num(&w, cfg->stall_samples);
+    lg_json_raw(&w, ", ");
+    lg_json_key(&w, "theme_light");
+    lg_json_write_bool(&w, cfg->theme_light);
     lg_json_end_object(&w);
     lg_json_raw(&w, ",\n");
 

@@ -22,6 +22,7 @@
 #include "lg_control.h"
 #include "lg_curve.h"
 #include "lg_hwmon.h"
+#include "lg_theme.h"
 
 typedef struct lg_ui lg_ui;
 
@@ -83,6 +84,7 @@ struct lg_ui {
     int drag_index;
     bool dirty;
     bool dark_mode;
+    GtkCssProvider *css_provider;
 
     /* Stall bookkeeping, one counter per control. */
     int stall_count[LG_MAX_CONTROLS];
@@ -320,12 +322,14 @@ static void rebuild_sensors(lg_ui *ui)
         }
         gtk_list_store_clear(store);
 
+        size_t emitted = 0;
         for (size_t k = 0; k < nsorted; k++) {
             {
                 const lg_sensor *s = sorted[k];
                 if ((int)s->cls != cls) {
                     continue;
                 }
+                emitted++;
 
                 char value[64];
                 lg_sensor_format(s, value, sizeof(value));
@@ -351,6 +355,47 @@ static void rebuild_sensors(lg_ui *ui)
                                    6, (int)(s - snap->sensors),
                                    -1);
             }
+        }
+
+        /*
+         * An empty tab is indistinguishable from a broken one, so say why. This
+         * matters most for current: hwmon overloads in*_input for both voltage
+         * and current, and a board with no amperage channels has nothing to
+         * show there however complete the support.
+         */
+        if (emitted == 0) {
+            const char *why;
+            switch ((lg_sensor_class)cls) {
+            case LG_SENSOR_CURRENT:
+                why = "no current channels are exposed by this hardware";
+                break;
+            case LG_SENSOR_POWER:
+                why = "no power or energy counters are exposed by this hardware";
+                break;
+            case LG_SENSOR_TEMP:
+                why = "no temperature channels were found";
+                break;
+            case LG_SENSOR_FAN:
+                why = "no fan tachometers were found";
+                break;
+            case LG_SENSOR_VOLT:
+                why = "no voltage rails were found";
+                break;
+            default:
+                why = "nothing was found";
+                break;
+            }
+            GtkTreeIter iter;
+            gtk_list_store_append(store, &iter);
+            gtk_list_store_set(store, &iter,
+                               0, "(none)",
+                               1, "",
+                               2, "",
+                               3, "--",
+                               4, "",
+                               5, why,
+                               6, -1,
+                               -1);
         }
     }
 
@@ -379,19 +424,61 @@ static lg_plot_area plot_area(lg_ui *ui)
     return a;
 }
 
+/*
+ * Colours for the curve editor. The widget draws with cairo rather than
+ * picking them up from the theme, so it would otherwise stay dark in light
+ * mode and read as a hole in the window.
+ */
+typedef struct {
+    double bg[3];
+    double grid[3];
+    double axis_text[3];
+    double border[3];
+    double curve[3];
+    double marker[4]; /* rgba: source temperature line */
+    double point[3];
+    double label[3];
+    double text[3];
+} lg_plot_palette;
+
+static const lg_plot_palette PLOT_DARK = {
+    {0.055, 0.062, 0.075},  /* bg */
+    {0.14, 0.15, 0.18},    /* grid */
+    {0.77, 0.78, 0.81},    /* axis text */
+    {0.38, 0.41, 0.46},    /* border */
+    {0.47, 0.75, 1.0},     /* curve */
+    {0.30, 0.85, 0.65, 0.55},
+    {1.0, 0.71, 0.33},     /* point */
+    {0.94, 0.95, 0.96},    /* label */
+    {0.85, 0.86, 0.88},    /* text */
+};
+
+static const lg_plot_palette PLOT_LIGHT = {
+    {0.98, 0.985, 0.99},
+    {0.85, 0.87, 0.90},
+    {0.32, 0.34, 0.38},
+    {0.60, 0.63, 0.68},
+    {0.05, 0.37, 0.71},
+    {0.05, 0.55, 0.36, 0.65},
+    {0.85, 0.47, 0.05},
+    {0.11, 0.11, 0.13},
+    {0.11, 0.11, 0.13},
+};
+
 static gboolean curve_draw_cb(GtkWidget *widget, cairo_t *cr, gpointer data)
 {
     UNUSED(widget);
     lg_ui *ui = data;
     const lg_curve *curve = selected_curve(ui);
     lg_plot_area a = plot_area(ui);
+    const lg_plot_palette *pal = ui->dark_mode ? &PLOT_DARK : &PLOT_LIGHT;
 
     /* Background. */
-    cairo_set_source_rgb(cr, 0.055, 0.062, 0.075);
+    cairo_set_source_rgb(cr, pal->bg[0], pal->bg[1], pal->bg[2]);
     cairo_paint(cr);
 
     if (curve == NULL || curve->npoints == 0) {
-        cairo_set_source_rgb(cr, 0.85, 0.86, 0.88);
+        cairo_set_source_rgb(cr, pal->text[0], pal->text[1], pal->text[2]);
         cairo_move_to(cr, 20, 20);
         cairo_show_text(cr, "No control selected");
         return FALSE;
@@ -409,31 +496,31 @@ static gboolean curve_draw_cb(GtkWidget *widget, cairo_t *cr, gpointer data)
     double step = MAX(2.0, floor((t1 - t0) / 5.0));
     for (double t = t0; t <= t1 + 0.001; t += step) {
         double x = a.left + ((t - t0) / (t1 - t0)) * a.width;
-        cairo_set_source_rgb(cr, 0.14, 0.15, 0.18);
+        cairo_set_source_rgb(cr, pal->grid[0], pal->grid[1], pal->grid[2]);
         cairo_move_to(cr, x, a.top);
         cairo_line_to(cr, x, a.bottom);
 
         char label[16];
         snprintf(label, sizeof(label), "%d", (int)llround(t));
-        cairo_set_source_rgb(cr, 0.77, 0.78, 0.81);
+        cairo_set_source_rgb(cr, pal->axis_text[0], pal->axis_text[1], pal->axis_text[2]);
         cairo_move_to(cr, x - 8, a.bottom + 16);
         cairo_show_text(cr, label);
     }
 
     for (int duty = 0; duty <= 100; duty += 20) {
         double y = a.top + ((100.0 - duty) / 100.0) * a.height;
-        cairo_set_source_rgb(cr, 0.14, 0.15, 0.18);
+        cairo_set_source_rgb(cr, pal->grid[0], pal->grid[1], pal->grid[2]);
         cairo_move_to(cr, a.left, y);
         cairo_line_to(cr, a.right, y);
 
         char label[16];
         snprintf(label, sizeof(label), "%d", duty);
-        cairo_set_source_rgb(cr, 0.77, 0.78, 0.81);
+        cairo_set_source_rgb(cr, pal->axis_text[0], pal->axis_text[1], pal->axis_text[2]);
         cairo_move_to(cr, 6, y + 4);
         cairo_show_text(cr, label);
     }
 
-    cairo_set_source_rgb(cr, 0.38, 0.41, 0.46);
+    cairo_set_source_rgb(cr, pal->border[0], pal->border[1], pal->border[2]);
     cairo_rectangle(cr, a.left, a.top, a.width, a.height);
     cairo_stroke(cr);
 
@@ -442,7 +529,8 @@ static gboolean curve_draw_cb(GtkWidget *widget, cairo_t *cr, gpointer data)
         double tt = ui->cfg.snapshot.cpu_temp;
         if (tt >= t0 && tt <= t1) {
             double x = a.left + ((tt - t0) / (t1 - t0)) * a.width;
-            cairo_set_source_rgba(cr, 0.30, 0.85, 0.65, 0.55);
+            cairo_set_source_rgba(cr, pal->marker[0], pal->marker[1], pal->marker[2],
+                                  pal->marker[3]);
             cairo_set_line_width(cr, 1.5);
             cairo_move_to(cr, x, a.top);
             cairo_line_to(cr, x, a.bottom);
@@ -453,7 +541,7 @@ static gboolean curve_draw_cb(GtkWidget *widget, cairo_t *cr, gpointer data)
     /* The curve itself, from the cached sample table. */
     size_t ns = lg_curve_build_samples((lg_curve *)curve);
     if (ns >= 2) {
-        cairo_set_source_rgb(cr, 0.47, 0.75, 1.0);
+        cairo_set_source_rgb(cr, pal->curve[0], pal->curve[1], pal->curve[2]);
         cairo_set_line_width(cr, 3.0);
         cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
         for (size_t i = 0; i < ns; i++) {
@@ -481,11 +569,11 @@ static gboolean curve_draw_cb(GtkWidget *widget, cairo_t *cr, gpointer data)
             cairo_stroke(cr);
         }
 
-        cairo_set_source_rgb(cr, 1.0, 0.71, 0.33);
+        cairo_set_source_rgb(cr, pal->point[0], pal->point[1], pal->point[2]);
         cairo_arc(cr, x, y, 5, 0, 2 * M_PI);
         cairo_fill(cr);
 
-        cairo_set_source_rgb(cr, 0.94, 0.95, 0.96);
+        cairo_set_source_rgb(cr, pal->label[0], pal->label[1], pal->label[2]);
         char label[32];
         snprintf(label, sizeof(label), "%dC/%d%%", temp, duty);
 
@@ -841,6 +929,11 @@ static void on_theme(GtkWidget *w, gpointer data)
     lg_ui *ui = data;
     ui->dark_mode = !ui->dark_mode;
     apply_theme(ui);
+    /* The curve editor paints its own background, so it needs to know too. */
+    gtk_widget_queue_draw(ui->curve_area);
+    ui->cfg.config.theme_light = ui->dark_mode ? false : true;
+    lg_config_save(&ui->cfg.config);
+    set_status(ui, "%s theme.", ui->dark_mode ? "Dark" : "Light");
 }
 
 static void on_failsafe(GtkWidget *w, gpointer data)
@@ -1123,28 +1216,46 @@ static gpointer ui_worker_entry(gpointer data)
 
 static void apply_theme(lg_ui *ui)
 {
-    static const char *dark_css =
-        "window { background-color: #14161a; }\n"
-        "label { color: #e6e8ec; }\n"
-        "treeview { background-color: #1b1e24; color: #e6e8ec; }\n"
-        "headerbar, toolbar { background-color: #1b1e24; }\n"
-        "entry, spinbutton { color: #e6e8ec; }\n"
-        "#banner-warn { background-color: #4a3a12; }\n"
-        "#banner-critical { background-color: #5c1f1f; }\n";
-    static const char *light_css =
-        "window { background-color: #f6f6f7; }\n"
-        "label { color: #1c1d20; }\n"
-        "treeview { background-color: #ffffff; color: #1c1d20; }\n"
-        "entry, spinbutton { color: #1c1d20; }\n"
-        "#banner-warn { background-color: #fdf3d0; }\n"
-        "#banner-critical { background-color: #f9d0d0; }\n";
-
     GtkCssProvider *provider = gtk_css_provider_new();
-    gtk_css_provider_load_from_data(provider, ui->dark_mode ? dark_css : light_css, -1, NULL);
-    gtk_style_context_add_provider_for_screen(gdk_screen_get_default(),
-                                             GTK_STYLE_PROVIDER(provider),
-                                             GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-    g_object_unref(provider);
+    gtk_css_provider_load_from_data(
+        provider,
+        lg_theme_css(ui->dark_mode ? LG_THEME_MODE_DARK : LG_THEME_MODE_LIGHT), -1, NULL);
+
+    GdkScreen *screen = gdk_screen_get_default();
+
+    /*
+     * Drop the previous provider first. Adding one per toggle without removing
+     * the last stacks providers at the same priority, so a rule that exists in
+     * only one palette keeps leaking into the other and the result depends on
+     * which theme was applied last.
+     */
+    if (ui->css_provider != NULL) {
+        gtk_style_context_remove_provider_for_screen(screen, GTK_STYLE_PROVIDER(ui->css_provider));
+        g_object_unref(ui->css_provider);
+    }
+
+    /*
+     * The base theme's dark/light mode is NOT switched here. Toggling
+     * gtk-application-prefer-dark-theme at runtime forces GTK to reload the
+     * theme, which tears down and rebuilds each TreeView's header widget, and
+     * the headers do not come back. The palette below therefore sets every
+     * surface it cares about explicitly, including the header and its buttons,
+     * rather than relying on the theme to be in a particular mode.
+     *
+     * main.c sets the preference once, before any widget is built, so the
+     * theme loads in the right mode from the start.
+     */
+    gtk_style_context_add_provider_for_screen(screen, GTK_STYLE_PROVIDER(provider),
+                                              GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    ui->css_provider = provider;
+
+    gtk_widget_queue_draw(ui->window);
+    if (ui->controls_view != NULL) {
+        gtk_widget_queue_draw(ui->controls_view);
+    }
+    if (ui->curve_area != NULL) {
+        gtk_widget_queue_draw(ui->curve_area);
+    }
 }
 
 GtkWidget *lg_ui_new(lg_ui_config *cfg)
@@ -1152,7 +1263,7 @@ GtkWidget *lg_ui_new(lg_ui_config *cfg)
     lg_ui *ui = g_new0(lg_ui, 1);
     ui->cfg = *cfg;
     ui->drag_index = -1;
-    ui->dark_mode = TRUE;
+    ui->dark_mode = (cfg->theme != LG_THEME_LIGHT);
     g_mutex_init(&ui->config_lock);
     g_mutex_init(&ui->worker_lock);
     g_cond_init(&ui->worker_cond);
@@ -1527,6 +1638,40 @@ void lg_ui_request(lg_ui *ui)
 /* Pending screenshot request, serviced by the main loop. */
 static char *g_shot_path = NULL;
 
+/* A compositor can hand back a uniformly black buffer; treat that as no data. */
+static gboolean pixbuf_has_content(GdkPixbuf *pb)
+{
+    if (pb == NULL) {
+        return FALSE;
+    }
+    int w = gdk_pixbuf_get_width(pb);
+    int h = gdk_pixbuf_get_height(pb);
+    int nch = gdk_pixbuf_get_n_channels(pb);
+    if (w <= 0 || h <= 0) {
+        return FALSE;
+    }
+
+    /* Sample a sparse grid and require more than one distinct colour. */
+    guint32 first = 0;
+    int distinct = 0;
+    for (int y = 0; y < h; y += (h / 24 > 0 ? h / 24 : 1)) {
+        for (int x = 0; x < w; x += (w / 24 > 0 ? w / 24 : 1)) {
+            guchar *p = gdk_pixbuf_get_pixels(pb) + (y * gdk_pixbuf_get_rowstride(pb)) + x * nch;
+            guint32 v = 0;
+            for (int c = 0; c < nch && c < 3; c++) {
+                v = (v << 8) | p[c];
+            }
+            if (distinct == 0) {
+                first = v;
+                distinct = 1;
+            } else if (v != first && distinct < 2) {
+                distinct = 2;
+            }
+        }
+    }
+    return distinct >= 2;
+}
+
 static gboolean shoot_cb(gpointer data)
 {
     lg_ui *ui = data;
@@ -1566,10 +1711,16 @@ static gboolean shoot_cb(gpointer data)
     }
 
     /*
-     * Render the widget tree into an offscreen surface rather than grabbing
-     * the root window. A screen grab depends on the compositor having the
-     * current frame and returns an empty image when it does not, which makes
-     * the capture unreliable exactly when it is most useful.
+     * Render the widget tree into an offscreen surface. A screen grab depends
+     * on the compositor having the current frame and can return an empty image,
+     * so the offscreen pass is the reliable fallback rather than the only
+     * option.
+     *
+     * It is not, however, complete: gtk_widget_draw does not render a
+     * TreeView's column headers, so an offscreen capture shows the rows with
+     * no headings at all. That is misleading when the point of the capture is
+     * to check appearance, so prefer a real read of the window and fall back
+     * to the offscreen render when the compositor gives us nothing back.
      */
     GtkAllocation alloc;
     gtk_widget_get_allocation(ui->window, &alloc);
@@ -1594,10 +1745,30 @@ static gboolean shoot_cb(gpointer data)
     cairo_status_t st = cairo_surface_write_to_png(surf, g_shot_path);
     cairo_surface_destroy(surf);
 
-    if (st != CAIRO_STATUS_SUCCESS) {
-        g_printerr("screenshot failed: %s\n", cairo_status_to_string(st));
-    } else {
+    /* Try the real window; it is the only capture that includes headers. */
+    gboolean real_ok = FALSE;
+    if (gtk_widget_get_window(ui->window) != NULL) {
+        GdkPixbuf *shot = gdk_pixbuf_get_from_window(gtk_widget_get_window(ui->window), 0, 0,
+                                                        alloc.width, alloc.height);
+        if (shot != NULL) {
+            real_ok = pixbuf_has_content(shot);
+            if (real_ok) {
+                GError *e = NULL;
+                if (!gdk_pixbuf_save(shot, g_shot_path, "png", &e, NULL)) {
+                    real_ok = FALSE;
+                    g_clear_error(&e);
+                }
+            }
+            g_object_unref(shot);
+        }
+    }
+
+    if (real_ok) {
         g_print("screenshot written to %s\n", g_shot_path);
+    } else if (st == CAIRO_STATUS_SUCCESS) {
+        g_print("screenshot written to %s (offscreen: headers not captured)\n", g_shot_path);
+    } else {
+        g_printerr("screenshot failed: %s\n", cairo_status_to_string(st));
     }
 
     gtk_main_quit();
