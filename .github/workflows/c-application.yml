@@ -34,20 +34,14 @@ jobs:
     - name: Unit, parity and migration tests
       run: make test
 
-    # Discovery is compared against the pre-rewrite golden file. The two
-    # implementations are expected to differ; the comparison prints the
-    # differences so a change outside the intended set is visible in review.
-    - name: Discovery parity comparison
+    # The discovery invariants are asserted by tests/test_detect_parity, which is
+    # also part of `make test`. This runs the file on its own for a quick check
+    # while discovery is being worked on.
+    - name: Discovery parity assertions
       run: make check-parity
 
-    - name: Sanitizers
-      run: |
-        make sanitize
-        ./tests/test_curve_parity tests/golden/curve_golden.json
-        ./tests/test_helper_allowlist
-
-    # The interface is exercised headlessly so a crash on startup fails the
-    # build rather than waiting to be discovered on a desktop.
+    # The interface is exercised headlessly so a crash on startup fails the build
+    # rather than waiting to be discovered on a desktop.
     - name: Smoke test the interface
       run: |
         XDG_CONFIG_HOME="$RUNNER_TEMP/config" \
@@ -60,3 +54,14 @@ jobs:
         name: liquidgui-screenshot
         path: ${{ runner.temp }}/shot.png
         if-no-files-found: error
+
+    # Sanitizers run last: `make sanitize` begins with `make clean`, so anything
+    # that needs the built binary has to come before this step.
+    - name: Sanitizers
+      run: |
+        make sanitize
+        ./tests/test_json
+        ./tests/test_curve_parity tests/golden/curve_golden.json
+        ./tests/test_helper_allowlist
+        ./tests/test_config
+        ./tests/test_detect_parity tests/golden/detect_golden.json
