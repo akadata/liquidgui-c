@@ -1,152 +1,207 @@
 # liquidgui
 
-`liquidgui` is a Python/Tk fan-control GUI for Linux that auto-detects:
+`liquidgui` is a C11/GTK3 fan-control application for Linux. It reads the
+sensors the kernel exposes under `/sys/class/hwmon`, drives AIO coolers and
+motherboard fan headers from a shared curve editor, and refuses to leave your
+fans in an unsafe state when it exits.
 
-- NZXT Kraken AIO controls through `liquidctl`
-- readable `hwmon` temperature sensors
-- writable motherboard `hwmon` PWM fan headers
+It replaces the earlier Python/Tk implementation, which is preserved under
+`tools/legacy/` for reference.
 
-Each detected control gets its own saved Bezier curve. The GUI can drive AIO
-pump and fan channels alongside motherboard fan headers from the same editor.
+![LiquidGUI](docs/screenshot.png)
 
-## Current behavior
+## What it controls
 
-- auto-detects available sensors and writable controls at runtime
-- supports per-control Bezier curves with automatic point propagation on the Y axis
-- saves curves in `~/.config/liquidgui_curves.json`
-- migrates older `~/.config/liquidctl_curves.json` fan and pump curves
-- uses `sudo` for control writes at the moment, which keeps development simple on local machines
+- **AIO coolers** exposed through hwmon, including the in-kernel
+  `nzxt_kraken3` driver that backs the NZXT Kraken. The pump and fan become
+  first-class controls alongside the motherboard headers.
+- **Motherboard fan headers** exposed as writable `pwmN` nodes.
+- **HID-only AIOs** via `liquidctl`, as a fallback when a cooler has no hwmon
+  interface at all. Only used when the AIO is not already reachable through
+  hwmon, so a single cooler is never driven through two paths at once.
 
-## Usage
+## What it reads
 
-Run the GUI:
+Everything the kernel offers, not just temperatures and fan speeds:
 
-```bash
-./liquidgui
-```
+| Class | Source |
+|---|---|
+| Temperature | `temp*_input` on every hwmon chip, plus `_min`/`_max`/`_crit` |
+| Fan speed | `fan*_input` |
+| Voltage | `in*_input` with `_min`/`_max` — VRM rails, DRAM, chipset, Vcore |
+| Current | `in*_input` where a driver reports amperage |
+| Power | `power/energy1_input` energy counters |
+| Thresholds | `*_crit`, `*_max`, `*_min`, NVMe `*_alarm` |
 
-Run with auto-reload for development:
+**Dead channels are filtered rather than displayed.** An NCT6687 on this board
+reports `PCIe x1` pinned at 193 °C and `Virtual 0` at −63 °C; those are
+unconnected inputs parked on a driver-declared bound, and the old interface
+rendered them as if they were real temperatures. A temperature equal to its
+declared `*_min` is treated as unconnected. The same test is deliberately *not*
+applied to voltages or fan speeds, where sitting at a declared minimum is
+legitimate — an idle Vcore at 558 mV, or a fan that has stopped.
 
-```bash
-./liquidgui --dev
-```
+## Build
 
-Print detected sensors and controls without opening the GUI:
-
-```bash
-./liquidgui --dump-detect
-```
-
-## Build and install
-
-Compile a single-file binary with PyInstaller: 
-Prerequisite: PyInstaller install with arch `yay -S pyinstaller`
-
-```bash
-make binary
-```
-
-
-That produces `dist/liquidgui`.
-
-Install the source launcher and `monitor.py` into `/usr/local/bin`:
+Requires GTK3 and a C11 compiler. On Arch: `pacman -S gtk3`.
 
 ```bash
+make
 sudo make install
 ```
 
-Install the compiled single-file binary into `/usr/local/bin`:
+## Privileged writes
+
+hwmon `pwm*` nodes are `root:root 0644`, so writing them needs root. Rather than
+shelling out to `sudo` on every write, `make install-helper` installs a small
+setuid helper:
 
 ```bash
-sudo make install-binary
+sudo make install-helper
 ```
 
-## Permissions
+It accepts one request shape and refuses everything else:
 
-Access to Kraken control usually requires either a working udev rule or root.
-A sample `liquidctl` udev rule is provided in `etc/udev/rules.d/60-liquidctl.rules`.
+```
+lg-helper --set <pwm path> <0-255>
+lg-helper --set <pwm path> --enable <pwm_enable path> <0-255>
+```
 
-Install the udev rule with:
+The target must match `^/sys/class/hwmon/hwmon[0-9]+/pwm[0-9]+(_enable)?$` with
+no traversal, opened with `O_NOFOLLOW` and checked with `fstat`. There is no
+shell, no format string and no general write primitive.
+`tests/test_helper_allowlist.c` exercises the validator against traversal,
+symlink nesting, and malformed values.
+
+If the helper is absent, `liquidgui` falls back to `pkexec` and then `sudo -n`,
+and says so in the header.
+
+## Usage
 
 ```bash
-sudo make udev-install
-sudo udevadm control --reload-rules
-sudo udevadm trigger
+liquidgui                     # launch the interface
+liquidgui --dump-detect       # discovered sensors and controls as JSON
+liquidgui --dump-config       # resolved configuration, including migrations
+liquidgui --no-apply          # start with automatic application off
+liquidgui --screenshot out.png  # render the window to a PNG and exit
 ```
 
-Add your user to the access group used by the rule:
+Shortcuts: `Ctrl+A` apply all, `Ctrl+a` apply selected, `Ctrl+R` reset the
+selected curve, `Space` pause writes, `Ctrl+T` toggle theme.
+
+## Safety
+
+- **Minimum duty floor** per control, applied after the curve is evaluated, so
+  a curve can never spin a fan below a chosen speed.
+- **Stall detection** — a control commanded to at least 20 % that reports 0 rpm
+  for three consecutive samples raises a banner.
+- **Thermal failsafe** — above a configurable threshold every enabled control is
+  held at 100 % and the banner turns critical.
+- **Restore on exit** — `SIGINT`, `SIGTERM`, `SIGHUP` and window close stop the
+  worker, return the fans to a safe state, and exit. The mode is configurable:
+  full speed, hand back to the board's own curve, or leave as-is. `SIGKILL`
+  cannot be caught and is the one case left to you.
+
+  Handing back restores the `pwm_enable` mode recorded at startup rather than
+  assuming one. A recorded `0` is written as `2` ("the controller runs its own
+  curve") because the driver rejects `0` on write; both mean the same thing, and
+  `2` is the ABI value.
+
+  Shutdown is ordered deliberately: the worker is stopped first, so it cannot
+  re-apply a curve after the restore. An earlier version did the restore from
+  inside a raw signal handler, which forked and allocated while the worker was
+  live and silently left the fans pinned. Exit takes a few seconds, most of it
+  draining an in-flight apply pass.
+- **Write verification** — see below.
+
+## Things the kernel will not tell you
+
+Two findings from probing this machine are baked into the write path, because
+both are silent failures that the previous implementation could not detect.
+
+**Entering manual mode resets the PWM register.** On `nzxt_kraken3`, writes to
+`pwmN` are *discarded* while `pwm_enable` is 0 — the write returns success and
+nothing happens. Setting `pwm_enable=1` is therefore mandatory, but it resets
+the register to a driver default: measured here, `pwm2` went to 0 and the
+radiator fan stalled for about a second. The helper takes the enable write and
+the duty write in a single invocation so the window stays at microseconds; the
+old code issued two separate `sudo tee` forks, tens of milliseconds apart, on
+every apply.
+
+**A write can be accepted and discarded.** `nct6687`'s `store_pwm` takes an
+exclusive lock on the EC's fan register set, gives up after a one second
+timeout if the EC is mid-update, and then returns the byte count as if the write
+had succeeded. Nothing in userspace can detect this from the return value — the
+node has to be read back. `liquidgui` does, retries across roughly the window
+the driver itself allows, and reports any channel that still will not move
+rather than showing a duty the hardware is ignoring.
+
+## Configuration
+
+Curves live in `~/.config/liquidgui/config.json` (or `$XDG_CONFIG_HOME`), written
+atomically.
+
+**Keys are stable.** They are built from the driver identity and channel
+number — `pwm:nct6687:3`, `pwm:nzxt_kraken3:1` — never from the absolute sysfs
+path. The previous implementation keyed on `/sys/class/hwmon/hwmonN/...`, and
+`hwmonN` is assigned in probe order and changes between boots, so saved curves
+could land on a different header or disappear. Where a board carries two chips
+that report the same hwmon name (an `nct6683` alongside an `nct6687` here), the
+platform driver name distinguishes them.
+
+On first run, keys in the old format are migrated. An entry is only remapped
+when the path still resolves *or* the old hwmon directory still exposes a
+writable pwm at that channel. Anything else is reported as an orphan rather
+than guessed at: matching on channel alone would hand an SPD5118 DIMM hub's
+saved curve to the CPU fan, because the hub has no pwm at all but does have
+numbered files. Curves that cannot be placed are listed in the load report so
+you can re-apply them deliberately.
+
+## Testing
 
 ```bash
-make user-install
+make test           # unit, parity and migration tests
+make check-parity   # diff discovery against the pre-rewrite golden file
+make sanitize       # the same tests under ASan and UBSan
 ```
 
-To add a different user:
+`tests/golden/` was captured from the Python implementation *before* the
+rewrite. `test_curve_parity` compares the full float Bezier sample table and 241
+duty lookups for each of 28 curves, so the C evaluation is held to the shipped
+behaviour rather than to a reimplementation of it. Two details make that
+possible: `lg_py_round` reproduces Python's round-half-to-even (C's `round` is
+half-away-from-zero and would differ by a whole duty step), and the Bezier
+control points are held in `double` because the tangent offsets are fractional.
 
-```bash
-make user-install INSTALL_USER=someuser
-```
+`make check-parity` prints the discovery differences for review. They are
+intended: stable keys, the AIO surfaced as hwmon controls, dead channels
+filtered, voltages newly read.
 
-To install both the rule and the user/group access in one step:
+## Board support
 
-```bash
-make permissions-install
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-```
-
-Equivalent manual reload commands:
-
-```bash
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-```
-
-On Arch Linux, adjust the group in the rule if you do not use `plugdev`, or override it during setup:
-
-```bash
-make user-install ACCESS_GROUP=uucp
-```
-
-## Motherboard fan support
-
-Motherboard fan control depends on the kernel exposing writable PWM nodes under
-`/sys/class/hwmon`. If AIO controls appear but motherboard headers do not, you
-may need a board-specific driver.
-
-This build has been tested on:
+Tested on:
 
 - Manufacturer: `Micro-Star International Co., Ltd.`
 - Product Name: `MPG Z790 CARBON WIFI (MS-7D89)`
+- Super-I/O: `nct6687` (writable headers) and `nct6683` (monitoring only), via
+  the DKMS driver in `/usr/src/nct6687d`
+- AIO: NZXT Kraken 2023 via the in-kernel `nzxt_kraken3` driver
 
-For Nuvoton NCT6687/NCT6687D based boards, see:
-
-- `https://github.com/akadata/nct6687d`
-- this is the documentation source used for this project
-- the Akadata tree was forked from `https://github.com/Fred78290/nct6687d`
-
-Once the driver is loaded and writable `pwmN` files appear in `hwmon`,
-`liquidgui` will pick them up automatically as `Motherboard fan 1`, `fan 2`,
-and so on.
-
-Testing on other motherboards is welcome. If your board exposes working
-`hwmon` PWM controls, please report the model and driver details so support can
-be documented more broadly.
-
-## Development
-
-Useful checks:
-
-```bash
-python3 -m py_compile liquidgui monitor.py
-```
-
-The launcher script is `liquidgui`, and the application logic lives in
-`monitor.py`.
+For Nuvoton NCT6687/NCT6687D boards see
+[`akadata/nct6687d`](https://github.com/akadata/nct6687d).
 
 ## Links
 
-Visit:
+- <https://articles.akadata.co.uk>
+- <https://www.akadata.co.uk/>
+- <https://www.breatechtechnology.co.uk/>
+- <https://saphira.vm2.uk>
 
-- `https://articles.akadata.ltd`
-- `https://www.akadata.ltd/`
-- `https://www.breatechtechnology.co.uk/`
+Saphira is our own Linux distribution, with Saphira-D providing the
+systemd-based flavour. It deliberately remains non-usr-merged and supports
+swapping between OpenRC and systemd while retaining the ability to boot back
+into OpenRC should you wish.
+
+## Licence
+
+MIT. See `LICENSE`.

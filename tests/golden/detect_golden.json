@@ -1,0 +1,556 @@
+{
+ "controls": [
+  {
+   "chip": "NZXT Kraken 2023",
+   "duty": 100,
+   "identifier": "pump",
+   "kind": "liquidctl",
+   "label": "AIO pump",
+   "max_duty": 100,
+   "min_duty": 0
+  },
+  {
+   "chip": "NZXT Kraken 2023",
+   "duty": 100,
+   "identifier": "fan",
+   "kind": "liquidctl",
+   "label": "AIO fan",
+   "max_duty": 100,
+   "min_duty": 0
+  },
+  {
+   "chip": "nct6687",
+   "duty": 52,
+   "identifier": "/sys/class/hwmon/hwmon12/pwm1",
+   "kind": "hwmon",
+   "label": " (CPU Fan)",
+   "max_duty": 100,
+   "min_duty": 0
+  },
+  {
+   "chip": "nct6687",
+   "duty": 100,
+   "identifier": "/sys/class/hwmon/hwmon12/pwm2",
+   "kind": "hwmon",
+   "label": " (Pump Fan)",
+   "max_duty": 100,
+   "min_duty": 0
+  },
+  {
+   "chip": "nct6687",
+   "duty": 100,
+   "identifier": "/sys/class/hwmon/hwmon12/pwm3",
+   "kind": "hwmon",
+   "label": " (System Fan #1)",
+   "max_duty": 100,
+   "min_duty": 0
+  },
+  {
+   "chip": "nct6687",
+   "duty": 100,
+   "identifier": "/sys/class/hwmon/hwmon12/pwm4",
+   "kind": "hwmon",
+   "label": " (System Fan #2)",
+   "max_duty": 100,
+   "min_duty": 0
+  },
+  {
+   "chip": "nct6687",
+   "duty": 100,
+   "identifier": "/sys/class/hwmon/hwmon12/pwm5",
+   "kind": "hwmon",
+   "label": " (System Fan #3)",
+   "max_duty": 100,
+   "min_duty": 0
+  },
+  {
+   "chip": "nct6687",
+   "duty": 100,
+   "identifier": "/sys/class/hwmon/hwmon12/pwm6",
+   "kind": "hwmon",
+   "label": " (System Fan #4)",
+   "max_duty": 100,
+   "min_duty": 0
+  },
+  {
+   "chip": "nct6687",
+   "duty": 100,
+   "identifier": "/sys/class/hwmon/hwmon12/pwm7",
+   "kind": "hwmon",
+   "label": " (System Fan #5)",
+   "max_duty": 100,
+   "min_duty": 0
+  },
+  {
+   "chip": "nct6687",
+   "duty": 50,
+   "identifier": "/sys/class/hwmon/hwmon12/pwm8",
+   "kind": "hwmon",
+   "label": " (System Fan #6)",
+   "max_duty": 100,
+   "min_duty": 0
+  }
+ ],
+ "cpu_temp_c": 60.0,
+ "fans": [
+  {
+   "chip": "nct6687",
+   "label": "fan10",
+   "path": "/sys/class/hwmon/hwmon11/fan10_input",
+   "rpm": 0
+  },
+  {
+   "chip": "nct6687",
+   "label": "fan1",
+   "path": "/sys/class/hwmon/hwmon11/fan1_input",
+   "rpm": 2264
+  },
+  {
+   "chip": "nct6687",
+   "label": "fan2",
+   "path": "/sys/class/hwmon/hwmon11/fan2_input",
+   "rpm": 0
+  },
+  {
+   "chip": "nct6687",
+   "label": "fan3",
+   "path": "/sys/class/hwmon/hwmon11/fan3_input",
+   "rpm": 0
+  },
+  {
+   "chip": "nct6687",
+   "label": "fan4",
+   "path": "/sys/class/hwmon/hwmon11/fan4_input",
+   "rpm": 0
+  },
+  {
+   "chip": "nct6687",
+   "label": "fan5",
+   "path": "/sys/class/hwmon/hwmon11/fan5_input",
+   "rpm": 1327
+  },
+  {
+   "chip": "nct6687",
+   "label": "fan6",
+   "path": "/sys/class/hwmon/hwmon11/fan6_input",
+   "rpm": 0
+  },
+  {
+   "chip": "nct6687",
+   "label": "fan7",
+   "path": "/sys/class/hwmon/hwmon11/fan7_input",
+   "rpm": 1382
+  },
+  {
+   "chip": "nct6687",
+   "label": "fan8",
+   "path": "/sys/class/hwmon/hwmon11/fan8_input",
+   "rpm": 0
+  },
+  {
+   "chip": "nct6687",
+   "label": "fan9",
+   "path": "/sys/class/hwmon/hwmon11/fan9_input",
+   "rpm": 0
+  },
+  {
+   "chip": "nct6687",
+   "label": "CPU Fan",
+   "path": "/sys/class/hwmon/hwmon12/fan1_input",
+   "rpm": 2264
+  },
+  {
+   "chip": "nct6687",
+   "label": "Pump Fan",
+   "path": "/sys/class/hwmon/hwmon12/fan2_input",
+   "rpm": 0
+  },
+  {
+   "chip": "nct6687",
+   "label": "System Fan #1",
+   "path": "/sys/class/hwmon/hwmon12/fan3_input",
+   "rpm": 0
+  },
+  {
+   "chip": "nct6687",
+   "label": "System Fan #2",
+   "path": "/sys/class/hwmon/hwmon12/fan4_input",
+   "rpm": 0
+  },
+  {
+   "chip": "nct6687",
+   "label": "System Fan #3",
+   "path": "/sys/class/hwmon/hwmon12/fan5_input",
+   "rpm": 1327
+  },
+  {
+   "chip": "nct6687",
+   "label": "System Fan #4",
+   "path": "/sys/class/hwmon/hwmon12/fan6_input",
+   "rpm": 0
+  },
+  {
+   "chip": "nct6687",
+   "label": "System Fan #5",
+   "path": "/sys/class/hwmon/hwmon12/fan7_input",
+   "rpm": 1382
+  },
+  {
+   "chip": "nct6687",
+   "label": "System Fan #6",
+   "path": "/sys/class/hwmon/hwmon12/fan8_input",
+   "rpm": 0
+  },
+  {
+   "chip": "kraken2023",
+   "label": "Pump speed",
+   "path": "/sys/class/hwmon/hwmon5/fan1_input",
+   "rpm": 2994
+  },
+  {
+   "chip": "kraken2023",
+   "label": "Fan speed",
+   "path": "/sys/class/hwmon/hwmon5/fan2_input",
+   "rpm": 1886
+  }
+ ],
+ "liquidctl": {
+  "channels": [
+   {
+    "duty": 100,
+    "label": "AIO pump",
+    "name": "pump"
+   },
+   {
+    "duty": 100,
+    "label": "AIO fan",
+    "name": "fan"
+   }
+  ],
+  "device": "NZXT Kraken 2023",
+  "telemetry": {
+   "fan duty": {
+    "unit": "%",
+    "value": 100.0
+   },
+   "fan speed": {
+    "unit": "rpm",
+    "value": 1886.0
+   },
+   "liquid temperature": {
+    "unit": "\u00b0C",
+    "value": 30.9
+   },
+   "pump duty": {
+    "unit": "%",
+    "value": 100.0
+   },
+   "pump speed": {
+    "unit": "rpm",
+    "value": 2994.0
+   }
+  }
+ },
+ "temps": [
+  {
+   "chip": "acpitz",
+   "label": "temp1",
+   "path": "/sys/class/hwmon/hwmon0/temp1_input",
+   "value_c": 27.8
+  },
+  {
+   "chip": "nvme",
+   "label": "Composite",
+   "path": "/sys/class/hwmon/hwmon1/temp1_input",
+   "value_c": 38.9
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 8",
+   "path": "/sys/class/hwmon/hwmon10/temp10_input",
+   "value_c": 47.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 12",
+   "path": "/sys/class/hwmon/hwmon10/temp14_input",
+   "value_c": 44.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 16",
+   "path": "/sys/class/hwmon/hwmon10/temp18_input",
+   "value_c": 45.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Package id 0",
+   "path": "/sys/class/hwmon/hwmon10/temp1_input",
+   "value_c": 60.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 20",
+   "path": "/sys/class/hwmon/hwmon10/temp22_input",
+   "value_c": 60.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 24",
+   "path": "/sys/class/hwmon/hwmon10/temp26_input",
+   "value_c": 47.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 0",
+   "path": "/sys/class/hwmon/hwmon10/temp2_input",
+   "value_c": 42.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 28",
+   "path": "/sys/class/hwmon/hwmon10/temp30_input",
+   "value_c": 46.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 32",
+   "path": "/sys/class/hwmon/hwmon10/temp34_input",
+   "value_c": 47.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 33",
+   "path": "/sys/class/hwmon/hwmon10/temp35_input",
+   "value_c": 47.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 34",
+   "path": "/sys/class/hwmon/hwmon10/temp36_input",
+   "value_c": 47.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 35",
+   "path": "/sys/class/hwmon/hwmon10/temp37_input",
+   "value_c": 47.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 36",
+   "path": "/sys/class/hwmon/hwmon10/temp38_input",
+   "value_c": 47.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 37",
+   "path": "/sys/class/hwmon/hwmon10/temp39_input",
+   "value_c": 47.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 38",
+   "path": "/sys/class/hwmon/hwmon10/temp40_input",
+   "value_c": 47.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 39",
+   "path": "/sys/class/hwmon/hwmon10/temp41_input",
+   "value_c": 47.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 40",
+   "path": "/sys/class/hwmon/hwmon10/temp42_input",
+   "value_c": 45.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 41",
+   "path": "/sys/class/hwmon/hwmon10/temp43_input",
+   "value_c": 45.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 42",
+   "path": "/sys/class/hwmon/hwmon10/temp44_input",
+   "value_c": 45.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 43",
+   "path": "/sys/class/hwmon/hwmon10/temp45_input",
+   "value_c": 45.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 44",
+   "path": "/sys/class/hwmon/hwmon10/temp46_input",
+   "value_c": 42.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 45",
+   "path": "/sys/class/hwmon/hwmon10/temp47_input",
+   "value_c": 42.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 46",
+   "path": "/sys/class/hwmon/hwmon10/temp48_input",
+   "value_c": 42.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 47",
+   "path": "/sys/class/hwmon/hwmon10/temp49_input",
+   "value_c": 42.0
+  },
+  {
+   "chip": "coretemp",
+   "label": "Core 4",
+   "path": "/sys/class/hwmon/hwmon10/temp6_input",
+   "value_c": 40.0
+  },
+  {
+   "chip": "nct6687",
+   "label": "PECI 0.0",
+   "path": "/sys/class/hwmon/hwmon11/temp1_input",
+   "value_c": 52.0
+  },
+  {
+   "chip": "nct6687",
+   "label": "Diode 0 (curr)",
+   "path": "/sys/class/hwmon/hwmon11/temp2_input",
+   "value_c": 48.5
+  },
+  {
+   "chip": "nct6687",
+   "label": "Thermistor 15",
+   "path": "/sys/class/hwmon/hwmon11/temp3_input",
+   "value_c": 44.0
+  },
+  {
+   "chip": "nct6687",
+   "label": "PCH CHIP",
+   "path": "/sys/class/hwmon/hwmon11/temp4_input",
+   "value_c": 61.0
+  },
+  {
+   "chip": "nct6687",
+   "label": "Thermistor 16",
+   "path": "/sys/class/hwmon/hwmon11/temp5_input",
+   "value_c": 40.0
+  },
+  {
+   "chip": "nct6687",
+   "label": "Virtual 0",
+   "path": "/sys/class/hwmon/hwmon11/temp6_input",
+   "value_c": -63.0
+  },
+  {
+   "chip": "nct6687",
+   "label": "CPU",
+   "path": "/sys/class/hwmon/hwmon12/temp1_input",
+   "value_c": 52.0
+  },
+  {
+   "chip": "nct6687",
+   "label": "System",
+   "path": "/sys/class/hwmon/hwmon12/temp2_input",
+   "value_c": 48.5
+  },
+  {
+   "chip": "nct6687",
+   "label": "VRM MOS",
+   "path": "/sys/class/hwmon/hwmon12/temp3_input",
+   "value_c": 44.0
+  },
+  {
+   "chip": "nct6687",
+   "label": "PCH",
+   "path": "/sys/class/hwmon/hwmon12/temp4_input",
+   "value_c": 61.0
+  },
+  {
+   "chip": "nct6687",
+   "label": "CPU Socket",
+   "path": "/sys/class/hwmon/hwmon12/temp5_input",
+   "value_c": 40.0
+  },
+  {
+   "chip": "nct6687",
+   "label": "PCIe x1",
+   "path": "/sys/class/hwmon/hwmon12/temp6_input",
+   "value_c": 193.0
+  },
+  {
+   "chip": "nct6687",
+   "label": "M2_1",
+   "path": "/sys/class/hwmon/hwmon12/temp7_input",
+   "value_c": 0.0
+  },
+  {
+   "chip": "nvme",
+   "label": "Composite",
+   "path": "/sys/class/hwmon/hwmon2/temp1_input",
+   "value_c": 37.9
+  },
+  {
+   "chip": "nvme",
+   "label": "Composite",
+   "path": "/sys/class/hwmon/hwmon3/temp1_input",
+   "value_c": 43.9
+  },
+  {
+   "chip": "nvme",
+   "label": "Sensor 1",
+   "path": "/sys/class/hwmon/hwmon3/temp2_input",
+   "value_c": 43.9
+  },
+  {
+   "chip": "nvme",
+   "label": "Sensor 2",
+   "path": "/sys/class/hwmon/hwmon3/temp3_input",
+   "value_c": 42.9
+  },
+  {
+   "chip": "spd5118",
+   "label": "temp1",
+   "path": "/sys/class/hwmon/hwmon4/temp1_input",
+   "value_c": 41.8
+  },
+  {
+   "chip": "kraken2023",
+   "label": "Coolant temp",
+   "path": "/sys/class/hwmon/hwmon5/temp1_input",
+   "value_c": 30.9
+  },
+  {
+   "chip": "spd5118",
+   "label": "temp1",
+   "path": "/sys/class/hwmon/hwmon6/temp1_input",
+   "value_c": 42.0
+  },
+  {
+   "chip": "spd5118",
+   "label": "temp1",
+   "path": "/sys/class/hwmon/hwmon7/temp1_input",
+   "value_c": 41.2
+  },
+  {
+   "chip": "spd5118",
+   "label": "temp1",
+   "path": "/sys/class/hwmon/hwmon8/temp1_input",
+   "value_c": 39.2
+  },
+  {
+   "chip": "iwlwifi_1",
+   "label": "temp1",
+   "path": "/sys/class/hwmon/hwmon9/temp1_input",
+   "value_c": null
+  }
+ ]
+}

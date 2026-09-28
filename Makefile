@@ -1,81 +1,163 @@
-PREFIX ?= /usr/local
-BINDIR ?= $(PREFIX)/bin
-UDEV_DIR ?= /etc/udev/rules.d
-DIST_DIR ?= dist
-INSTALL_USER ?= $(USER)
-ACCESS_GROUP ?= plugdev
+# liquidgui - AIO and motherboard fan control
+#
+# (C) 2026 AKADATA LIMITED - Andrew Smalley
+# Released under the MIT License.
 
-SCRIPT = liquidgui
-MODULES = monitor.py
-UDEV_RULE = etc/udev/rules.d/60-liquidctl.rules
-BINARY_PATH = $(DIST_DIR)/liquidgui
+PREFIX      ?= /usr/local
+BINDIR      ?= $(PREFIX)/bin
+LIBEXECDIR  ?= $(PREFIX)/libexec/liquidgui
+UDEV_DIR   ?= /etc/udev/rules.d
+DESTDIR    ?=
 
-PYINSTALLER ?= $(PYTHON) -m PyInstaller
+CC          ?= cc
+PKG_CONFIG  ?= pkg-config
+INSTALL     ?= install
 
-.PHONY: all install install-source install-binary uninstall uninstall-source uninstall-binary uninstall-udev udev-install user-install permissions-install test clean binary help
+VERSION     ?= 2.0.0
+UDEV_RULE   = etc/udev/rules.d/60-liquidctl.rules
+HELPER      = lg-helper
+
+WARNINGS = -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes \
+           -Wmissing-prototypes -Wpointer-arith -Wwrite-strings
+CFLAGS  ?= -O2 -g
+CFLAGS  += -std=c11 -D_GNU_SOURCE -DLG_VERSION=\"$(VERSION)\" $(WARNINGS)
+LDFLAGS ?=
+LDLIBS  ?=
+
+GTK_CFLAGS := $(shell $(PKG_CONFIG) --cflags gtk+-3.0 2>/dev/null)
+GTK_LIBS   := $(shell $(PKG_CONFIG) --libs   gtk+-3.0 2>/dev/null)
+ifeq ($(strip $(GTK_LIBS)),)
+$(error gtk+-3.0 development files are required. On Arch: pacman -S gtk3)
+endif
+
+CORE_SRC = \
+	src/lg_json.c \
+	src/lg_model.c \
+	src/lg_curve.c \
+	src/lg_hwmon.c \
+	src/lg_liquidctl.c \
+	src/lg_control.c \
+	src/lg_config.c \
+	src/lg_dump.c
+
+UI_SRC = \
+	src/lg_ui.c \
+	src/main.c
+
+CORE_OBJ = $(CORE_SRC:.c=.o)
+UI_OBJ   = $(UI_SRC:.c=.o)
+TEST_OBJ = $(CORE_OBJ)
+
+BIN     = liquidgui
+HELPER_BIN = helper/$(HELPER)
+
+TEST_BINS = \
+	tests/test_json \
+	tests/test_curve_parity \
+	tests/test_helper_allowlist \
+	tests/test_config
+
+.PHONY: all test check-parity sanitize install install-helper uninstall clean run dump help
+
+all: $(BIN)
+
+$(BIN): $(CORE_OBJ) $(UI_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(GTK_LIBS) $(LDLIBS) -lm
+
+# The helper is the only component that runs as root, so it is built with the
+# strictest warning set and is never linked against anything it does not need.
+$(HELPER_BIN): helper/lg-helper.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+# Plain C for the core; the interface additionally needs the GTK include path.
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+src/lg_ui.o src/main.o: CFLAGS += $(GTK_CFLAGS)
+
+# --------------------------------------------------------------------- tests
+
+tests/test_json: tests/test_json.c src/lg_json.o
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
+
+tests/test_curve_parity: tests/test_curve_parity.c $(TEST_OBJ)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
+
+tests/test_helper_allowlist: tests/test_helper_allowlist.c
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+
+tests/test_config: tests/test_config.c $(TEST_OBJ)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
+
+test: $(TEST_BINS)
+	@echo "== json reader and writer =="
+	@./tests/test_json
+	@echo "== curve parity against the legacy Python =="
+	@./tests/test_curve_parity tests/golden/curve_golden.json
+	@echo "== helper allowlist =="
+	@./tests/test_helper_allowlist
+	@echo "== configuration and key migration =="
+	@./tests/test_config
+
+# Discovery is compared against tests/golden/detect_golden.json. The two
+# implementations are expected to differ: the C side adds the AIO as hwmon
+# controls, uses stable keys, and filters dead sensors. check-parity prints the
+# diff so the difference is reviewed rather than assumed.
+check-parity: $(BIN)
+	@echo "== discovery comparison (differences are expected and reviewed) =="
+	@./$(BIN) --dump-detect --no-liquidctl > /tmp/liquidgui-detect-new.json
+	@python3 tools/compare_detect.py tests/golden/detect_golden.json \
+		/tmp/liquidgui-detect-new.json || true
+
+sanitize:
+	$(MAKE) clean
+	$(MAKE) test CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -std=c11 -D_GNU_SOURCE $(WARNINGS)"
+
+# ------------------------------------------------------------------- runtime
+
+run: $(BIN)
+	./$(BIN)
+
+dump: $(BIN)
+	@./$(BIN) --dump-detect --no-liquidctl
+
+# ------------------------------------------------------------------ install
+
+install: $(BIN)
+	$(INSTALL) -Dm755 $(BIN) $(DESTDIR)$(BINDIR)/$(BIN)
+
+# The helper must be installed setuid root. Refuse to do it half-way: a helper
+# without the setuid bit silently degrades to a polkit prompt on every write.
+install-helper: $(HELPER_BIN)
+	@if [ "$(DESTDIR)" != "" ]; then \
+		echo "packaging stage: installing $(HELPER_BIN) without the setuid bit"; \
+		$(INSTALL) -Dm755 $(HELPER_BIN) $(DESTDIR)$(LIBEXECDIR)/$(HELPER); \
+	else \
+		$(INSTALL) -Dm4755 $(HELPER_BIN) $(LIBEXECDIR)/$(HELPER); \
+		$(INSTALL) -Dm644 $(UDEV_RULE) $(UDEV_DIR)/60-liquidctl.rules; \
+		echo "installed setuid helper at $(LIBEXECDIR)/$(HELPER)"; \
+		udevadm control --reload-rules 2>/dev/null || true; \
+		udevadm trigger 2>/dev/null || true; \
+	fi
+
+uninstall:
+	rm -f $(DESTDIR)$(BINDIR)/$(BIN)
+	rm -f $(DESTDIR)$(LIBEXECDIR)/$(HELPER)
+	rm -f $(DESTDIR)$(UDEV_DIR)/60-liquidctl.rules
+
+clean:
+	rm -f $(CORE_OBJ) $(UI_OBJ) $(BIN) $(HELPER_BIN) $(TEST_BINS)
+	rm -rf tests/__pycache__ __pycache__ build dist
 
 help:
 	@printf '%s\n' \
-	'Available targets:' \
-	'  make help               Show this help text' \
-	'  make test               Run Python syntax checks' \
-	'  make binary             Build the standalone binary with PyInstaller' \
-	'  make install            Install dist/liquidgui if it exists, otherwise install the source launcher' \
-	'  make install-source     Install the source launcher and Python module files' \
-	'  make install-binary     Build and install the standalone binary' \
-	'  make permissions-install Install udev rule and add the user to the access group' \
-	'  make uninstall          Remove installed launcher, binary, and module files' \
-	'  make uninstall-udev     Remove the installed udev rule' \
-	'  make clean              Remove build artifacts'
-
-# Default target runs basic checks; the standalone binary is optional
-all: test
-
-install:
-	@if [ -f "$(BINARY_PATH)" ]; then \
-		$(MAKE) install-binary; \
-	else \
-		$(MAKE) install-source; \
-	fi
-
-install-source:
-	install -Dm755 $(SCRIPT) $(DESTDIR)$(BINDIR)/$(SCRIPT)
-	for m in $(MODULES); do install -Dm644 $$m $(DESTDIR)$(BINDIR)/$$m; done
-
-install-binary:
-	@test -f $(BINARY_PATH) || { printf 'Built binary not found at %s\nRun make binary first.\n' "$(BINARY_PATH)"; exit 1; }
-	install -Dm755 $(BINARY_PATH) $(DESTDIR)$(BINDIR)/liquidgui
-
-udev-install:
-	install -Dm644 $(UDEV_RULE) $(DESTDIR)$(UDEV_DIR)/60-liquidctl.rules
-
-user-install:
-	sudo groupadd -f $(ACCESS_GROUP)
-	sudo usermod -aG $(ACCESS_GROUP) $(INSTALL_USER)
-	@printf 'Added %s to %s. Log out and back in for the new group to apply.\n' "$(INSTALL_USER)" "$(ACCESS_GROUP)"
-
-permissions-install: udev-install user-install
-
-uninstall: uninstall-source uninstall-binary
-
-uninstall-source:
-	rm -f $(DESTDIR)$(BINDIR)/$(SCRIPT)
-	for m in $(MODULES); do rm -f $(DESTDIR)$(BINDIR)/$$m; done
-
-uninstall-binary:
-	rm -f $(DESTDIR)$(BINDIR)/liquidgui
-
-uninstall-udev:
-	rm -f $(DESTDIR)$(UDEV_DIR)/60-liquidctl.rules
-
-PYTHON ?= python3
-
-test:
-	$(PYTHON) -m py_compile $(SCRIPT) $(MODULES)
-
-binary: test
-	$(PYINSTALLER) --onefile $(SCRIPT)
-
-clean:
-	rm -rf __pycache__ build dist
-	find . -name "*.pyc" -delete
+	  'Targets:' \
+	  '  make                 build the liquidgui binary' \
+	  '  make test            build and run the unit and parity tests' \
+	  '  make check-parity    diff discovery against the legacy golden file' \
+	  '  make sanitize        run the tests under ASan and UBSan' \
+	  '  make run             build and launch the interface' \
+	  '  make dump            print discovered sensors and controls as JSON' \
+	  '  sudo make install    install the binary' \
+	  '  sudo make install-helper  install the setuid helper and udev rule' \
+	  '  make uninstall       remove installed files'

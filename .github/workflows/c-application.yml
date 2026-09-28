@@ -1,0 +1,62 @@
+name: C application
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential \
+          pkg-config \
+          libgtk-3-dev \
+          xvfb
+
+    - name: Build
+      run: make
+
+    - name: Build the privileged helper
+      run: make helper/lg-helper
+
+    - name: Unit, parity and migration tests
+      run: make test
+
+    # Discovery is compared against the pre-rewrite golden file. The two
+    # implementations are expected to differ; the comparison prints the
+    # differences so a change outside the intended set is visible in review.
+    - name: Discovery parity comparison
+      run: make check-parity
+
+    - name: Sanitizers
+      run: |
+        make sanitize
+        ./tests/test_curve_parity tests/golden/curve_golden.json
+        ./tests/test_helper_allowlist
+
+    # The interface is exercised headlessly so a crash on startup fails the
+    # build rather than waiting to be discovered on a desktop.
+    - name: Smoke test the interface
+      run: |
+        XDG_CONFIG_HOME="$RUNNER_TEMP/config" \
+        xvfb-run -a ./liquidgui --no-apply --screenshot "$RUNNER_TEMP/shot.png"
+        test -s "$RUNNER_TEMP/shot.png"
+
+    - name: Upload the render
+      uses: actions/upload-artifact@v4
+      with:
+        name: liquidgui-screenshot
+        path: ${{ runner.temp }}/shot.png
+        if-no-files-found: error
