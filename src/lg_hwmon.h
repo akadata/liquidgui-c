@@ -48,6 +48,16 @@ void lg_discover_pick_sources(lg_snapshot *snap);
 /* Format a sensor reading for display, e.g. "46.5 C" or "--". */
 void lg_sensor_format(const lg_sensor *sensor, char *out, size_t cap);
 
+/*
+ * Format a sensor's declared minimum or maximum, in the class's own unit and
+ * with the precision that unit needs.
+ *
+ * Separate from lg_sensor_format because a bound is a bare number, not a
+ * reading: the reader already knows the column and the unit, and repeating
+ * "2948 rpm .. 4095 rpm" in every row crowds the table.
+ */
+void lg_sensor_format_bound(const lg_sensor *sensor, double value, char *out, size_t cap);
+
 /* Format a control's current duty as a percentage string. */
 void lg_control_format_duty(const lg_control *ctl, char *out, size_t cap);
 

@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "lg_hwmon.h"
 #include "lg_json.h"
 
 /*
@@ -144,6 +145,34 @@ char *lg_snapshot_to_json(const lg_snapshot *snap, int indent_depth)
             lg_json_raw(&w, ", ");
             lg_json_key(&w, "valid");
             lg_json_write_bool(&w, s->valid);
+            lg_json_raw(&w, ", ");
+            /*
+             * The strings the interface actually renders, not just the numbers
+             * behind them. A display bug is invisible to a dump that only
+             * carries values: a range printed as 2.82e+03 .. 4.1e+03 looked
+             * perfectly correct in the underlying data, and the numbers alone
+             * would not have shown it.
+             */
+            char rendered[64];
+            char range[96];
+            lg_sensor_format(s, rendered, sizeof(rendered));
+            char lo[32];
+            char hi[32];
+            if (s->has_min && s->has_max) {
+                lg_sensor_format_bound(s, s->min, lo, sizeof(lo));
+                lg_sensor_format_bound(s, s->max, hi, sizeof(hi));
+                snprintf(range, sizeof(range), "%s .. %s", lo, hi);
+            } else if (s->has_crit) {
+                lg_sensor_format_bound(s, s->crit, lo, sizeof(lo));
+                snprintf(range, sizeof(range), "crit %s", lo);
+            } else {
+                snprintf(range, sizeof(range), "--");
+            }
+            lg_json_key(&w, "display");
+            lg_json_write_str(&w, rendered);
+            lg_json_raw(&w, ", ");
+            lg_json_key(&w, "range_display");
+            lg_json_write_str(&w, range);
             lg_json_raw(&w, ", ");
             lg_json_key(&w, "note");
             lg_json_write_str(&w, s->note);

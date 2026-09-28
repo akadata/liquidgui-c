@@ -458,6 +458,72 @@ static void test_power_formatting(void)
     }
 }
 
+/*
+ * Declared bounds must print in full, in the class's own unit.
+ *
+ * The Range column used a bare "%.3g", which switches to scientific notation
+ * at 1000 and keeps only three significant digits at any magnitude. A CPU fan
+ * whose observed range was 2823..4095 rpm rendered as "2.82e+03 .. 4.1e+03",
+ * which is neither the value nor a faithful rounding of it, and a +5V rail
+ * minimum of 5000 mV rendered as "5.03e+03".
+ */
+static void test_bound_formatting(void)
+{
+    struct {
+        lg_sensor_class cls;
+        double value;
+        const char *want;
+        const char *what;
+    } cases[] = {
+        {LG_SENSOR_FAN, 2823.0, "2823", "fan minimum"},
+        {LG_SENSOR_FAN, 4095.0, "4095", "fan maximum"},
+        {LG_SENSOR_FAN, 870.0, "870", "three-digit fan minimum"},
+        {LG_SENSOR_FAN, 12000.0, "12000", "five-digit fan maximum"},
+        {LG_SENSOR_FAN, 0.0, "0", "stopped fan"},
+        {LG_SENSOR_VOLT, 12.024, "12.024", "12V rail minimum keeps its millivolts"},
+        {LG_SENSOR_VOLT, 3.356, "3.356", "3.3V rail"},
+        {LG_SENSOR_VOLT, 5.000, "5.000", "5V rail minimum, the case %g turned into 5.03e+03"},
+        {LG_SENSOR_VOLT, 0.558, "558 mV", "sub-volt minimum stays in millivolts"},
+        {LG_SENSOR_TEMP, 43.0, "43.00", "temperature minimum"},
+        {LG_SENSOR_CURRENT, 12.0, "12", "current minimum is a whole number"},
+    };
+
+    lg_sensor s;
+    char got[64];
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        memset(&s, 0, sizeof(s));
+        s.cls = cases[i].cls;
+        lg_sensor_format_bound(&s, cases[i].value, got, sizeof(got));
+        checks++;
+        if (strcmp(got, cases[i].want) != 0) {
+            printf("FAIL: %s: got \"%s\", want \"%s\"\n", cases[i].what, got, cases[i].want);
+            failures++;
+        }
+        /* No bound may ever come out in scientific notation. */
+        checks++;
+        if (strpbrk(got, "eE") != NULL) {
+            printf("FAIL: %s: \"%s\" is scientific notation\n", cases[i].what, got);
+            failures++;
+        }
+    }
+
+    /* A missing bound renders as unknown rather than as a number. */
+    memset(&s, 0, sizeof(s));
+    s.cls = LG_SENSOR_FAN;
+    lg_sensor_format_bound(&s, NAN, got, sizeof(got));
+    checks++;
+    if (strcmp(got, "--") != 0) {
+        printf("FAIL: non-finite bound rendered as \"%s\"\n", got);
+        failures++;
+    }
+    lg_sensor_format_bound(NULL, 100.0, got, sizeof(got));
+    checks++;
+    if (strcmp(got, "--") != 0) {
+        printf("FAIL: null sensor rendered as \"%s\"\n", got);
+        failures++;
+    }
+}
+
 int main(int argc, char **argv)
 {
     const char *golden = (argc > 1) ? argv[1] : "tests/golden/detect_golden.json";
@@ -483,6 +549,7 @@ int main(int argc, char **argv)
     test_secondary_chip_is_not_a_control(&snap);
     test_coolant_is_read(&snap);
     test_handback_safety(&snap);
+    test_bound_formatting();
     test_golden_is_loadable(golden);
     test_power_formatting();
 

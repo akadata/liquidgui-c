@@ -334,11 +334,24 @@ static void rebuild_sensors(lg_ui *ui)
                 char value[64];
                 lg_sensor_format(s, value, sizeof(value));
 
+                /*
+                 * Formatted per class rather than with %g. Three significant
+                 * digits switches to scientific notation at 1000, so a CPU
+                 * fan's 2823..4095 rpm rendered as "2.82e+03 .. 4.1e+03" and a
+                 * +5V rail's 5000 mV minimum as "5.03e+03". The unit is
+                 * carried by the column header, so the bound itself is a bare
+                 * number.
+                 */
+                char lo[32];
+                char hi[32];
                 char range[96];
                 if (s->has_min && s->has_max) {
-                    snprintf(range, sizeof(range), "%.3g .. %.3g", s->min, s->max);
+                    lg_sensor_format_bound(s, s->min, lo, sizeof(lo));
+                    lg_sensor_format_bound(s, s->max, hi, sizeof(hi));
+                    snprintf(range, sizeof(range), "%s .. %s", lo, hi);
                 } else if (s->has_crit) {
-                    snprintf(range, sizeof(range), "crit %.3g", s->crit);
+                    lg_sensor_format_bound(s, s->crit, lo, sizeof(lo));
+                    snprintf(range, sizeof(range), "crit %s", lo);
                 } else {
                     snprintf(range, sizeof(range), "--");
                 }

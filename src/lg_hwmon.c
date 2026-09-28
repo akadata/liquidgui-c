@@ -1083,6 +1083,56 @@ bool lg_discover(lg_snapshot *snap, const lg_discover_opts *opts)
     return true;
 }
 
+/*
+ * Format a declared minimum or maximum.
+ *
+ * Precision follows the class. Fan speeds and currents are whole numbers in
+ * their own unit, so a fan that reached 4095 rpm is 4095 and not 4.1e+03.
+ * Voltages and temperatures are scaled from an integer of millivolts and
+ * millidegrees, so they need the decimals that scaling produced and no more.
+ * A voltage rail min of 12.024 V is 12.02, not 12, which is what a fixed three
+ * significant digits would have printed.
+ *
+ * The point of not using %g here: %g switches to scientific notation at 1000
+ * and keeps only three significant digits at any magnitude, so it mangled both
+ * ends of this range. A 5000 mV rail minimum printed as 5.03e+03, and a CPU
+ * fan's 2823..4095 rpm printed as 2.82e+03 .. 4.1e+03 -- which is neither the
+ * value nor a faithful rounding of it.
+ */
+void lg_sensor_format_bound(const lg_sensor *s, double value, char *out, size_t cap)
+{
+    if (out == NULL || cap == 0) {
+        return;
+    }
+    if (s == NULL || !isfinite(value)) {
+        snprintf(out, cap, "--");
+        return;
+    }
+
+    switch (s->cls) {
+    case LG_SENSOR_TEMP:
+        snprintf(out, cap, "%.2f", value);
+        break;
+    case LG_SENSOR_FAN:
+    case LG_SENSOR_CURRENT:
+        /* rpm and amperes are integers; a decimal place would be noise. */
+        snprintf(out, cap, "%.0f", value);
+        break;
+    case LG_SENSOR_VOLT:
+        /* Below 1 V the scaled value is sub-volt and needs millivolts to say
+         * anything useful, matching how lg_sensor_format prints the reading. */
+        if (value > 0.0 && value < 1.0) {
+            snprintf(out, cap, "%.0f mV", value * 1000.0);
+        } else {
+            snprintf(out, cap, "%.3f", value);
+        }
+        break;
+    default:
+        snprintf(out, cap, "%.2f", value);
+        break;
+    }
+}
+
 void lg_sensor_format(const lg_sensor *s, char *out, size_t cap)
 {
     if (out == NULL || cap == 0) {
