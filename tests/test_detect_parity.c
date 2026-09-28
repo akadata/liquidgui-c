@@ -332,6 +332,60 @@ static void test_golden_is_loadable(const char *golden_path)
     free(text);
 }
 
+/*
+ * Power and energy presentation.
+ *
+ * Energy counters are cumulative and grow without bound, so a raw
+ * milliwatt-hour figure is unreadable within a day of uptime. The formatter
+ * must scale into the largest unit that keeps the number small, and must roll
+ * over rather than print "1000.00" in a smaller unit.
+ */
+static void format_power(lg_sensor *s, double value, const char *unit, char *out, size_t cap)
+{
+    memset(s, 0, sizeof(*s));
+    s->cls = LG_SENSOR_POWER;
+    s->value = value;
+    s->valid = true;
+    snprintf(s->unit, sizeof(s->unit), "%s", unit);
+    lg_sensor_format(s, out, cap);
+}
+
+static void test_power_formatting(void)
+{
+    struct {
+        double value;
+        const char *unit;
+        const char *want;
+        const char *what;
+    } cases[] = {
+        {0.0, "mWh", "0.00 mWh", "zero energy"},
+        {86.12, "mWh", "86.12 mWh", "small energy stays in mWh"},
+        {999.4, "mWh", "999.40 mWh", "just under the mWh limit stays put"},
+        {1000.0, "mWh", "1.00 Wh", "1000 mWh becomes 1 Wh"},
+        {1500.0, "mWh", "1.50 Wh", "1.5 Wh"},
+        {999999.0, "mWh", "1.00 kWh", "rolls over instead of printing 1000.00 Wh"},
+        {1.0e6, "mWh", "1.00 kWh", "a million mWh is a kWh"},
+        {136345107.071, "mWh", "136.35 kWh", "a realistic day of package energy"},
+        {2.5e9, "mWh", "2.50 MWh", "gigawatt-hours"},
+        {0.0, "W", "0.0 W", "zero watts"},
+        {253.0, "W", "253.0 W", "a power limit stays in watts"},
+        {1000.0, "W", "1.0 kW", "1000 W becomes 1 kW"},
+        {253000.0, "W", "253.0 kW", "kilowatts"},
+        {1.5e6, "W", "1.5 MW", "megawatts"},
+    };
+
+    lg_sensor s;
+    char got[64];
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        format_power(&s, cases[i].value, cases[i].unit, got, sizeof(got));
+        checks++;
+        if (strcmp(got, cases[i].want) != 0) {
+            printf("FAIL: %s: got \"%s\", want \"%s\"\n", cases[i].what, got, cases[i].want);
+            failures++;
+        }
+    }
+}
+
 int main(int argc, char **argv)
 {
     const char *golden = (argc > 1) ? argv[1] : "tests/golden/detect_golden.json";
@@ -357,6 +411,7 @@ int main(int argc, char **argv)
     test_secondary_chip_is_not_a_control(&snap);
     test_coolant_is_read(&snap);
     test_golden_is_loadable(golden);
+    test_power_formatting();
 
     printf("%ld checks, %d failures, %d skipped\n", checks, failures, skipped);
     return failures == 0 ? 0 : 1;

@@ -310,6 +310,34 @@ static void load_chip(lg_chip *chip, const char *dir)
 
 /* --------------------------------------------------------- sensor scanning */
 
+/*
+ * Add a cumulative energy counter. hwmon's energy1_input is in microjoules and
+ * RAPL's energy_uj likewise, so this converts to milliwatt-hours itself.
+ *
+ * It deliberately does not reuse add_sensor: the generic path scales power by
+ * 1e6 to give joules, which is the right figure for an instantaneous reading but
+ * 2778 times too large for a counter that is then labelled mWh.
+ */
+static void add_energy(lg_snapshot *snap, const lg_chip *chip, const char *label,
+                       const char *sysfs, long microjoules)
+{
+    if (snap->nsensors >= LG_MAX_SENSORS) {
+        return;
+    }
+    lg_sensor *s = &snap->sensors[snap->nsensors];
+    memset(s, 0, sizeof(*s));
+    s->cls = LG_SENSOR_POWER;
+    s->value = (double)microjoules / 1000.0; /* microjoules -> milliwatt-hours */
+    s->valid = true;
+    copy_str(s->chip, sizeof(s->chip), chip->nameval);
+    copy_str(s->driver, sizeof(s->driver), chip->driver);
+    copy_str(s->sysfs, sizeof(s->sysfs), sysfs);
+    copy_str(s->label, sizeof(s->label), label);
+    copy_str(s->unit, sizeof(s->unit), "mWh");
+    s->index = (int)snap->nsensors;
+    snap->nsensors++;
+}
+
 /* Scale and units differ per class; keep raw in native units and scale at format. */
 static double sensor_scale(lg_sensor_class cls, long raw)
 {
@@ -351,7 +379,7 @@ static void add_sensor(lg_snapshot *snap, const lg_chip *chip, lg_sensor_class c
     /* Thresholds share the input's unit. The suffix buffers are larger than
      * the base so appending "_crit" can never truncate. */
     char base[LG_PATH_MAX];
-    snprintf(base, sizeof(base), "%s", input_path);
+    copy_str(base, sizeof(base), input_path);
     char *suffix = strstr(base, "_input");
     if (suffix != NULL) {
         *suffix = '\0';
@@ -498,8 +526,7 @@ static void scan_sensors(lg_snapshot *snap, const lg_chip *chip, bool secondary)
         if (!read_int_file(energy, &raw)) {
             continue;
         }
-        add_sensor(snap, chip, LG_SENSOR_POWER, 1, "energy", energy, raw);
-        snprintf(snap->sensors[snap->nsensors - 1].unit, sizeof(snap->sensors[0].unit), "mWh");
+        add_energy(snap, chip, "energy", energy, raw);
         break;
     }
 
@@ -1048,10 +1075,45 @@ void lg_sensor_format(const lg_sensor *s, char *out, size_t cap)
         }
         break;
     case LG_SENSOR_POWER:
+        /*
+         * Energy is a cumulative counter, so it grows without bound and a raw
+         * milliwatt-hour figure becomes unreadable long before the machine has
+         * been up a day. Scale into the largest unit that keeps the number
+         * below 1000: 131339691 mWh reads as 131.34 MWh rather than as nine
+         * digits. Watts scale the same way for large limits.
+         */
         if (strcmp(unit, "mWh") == 0) {
-            snprintf(out, cap, "%.0f mWh", s->value);
+            /* Largest first; the index starts at the smallest and decrements. */
+            static const char *const up[] = {"GWh", "MWh", "kWh", "Wh", "mWh"};
+            double v = s->value;
+            size_t idx = (sizeof(up) / sizeof(up[0])) - 1;
+            /*
+             * The threshold is just below the point where the printed value
+             * would reach 1000, so 999999 mWh rolls on to 1.00 kWh instead of
+             * rendering as "1000.00 Wh".
+             */
+            const double roll = 999.995;
+            for (size_t k = 0; k + 1 < sizeof(up) / sizeof(up[0]); k++) {
+                if (fabs(v) < roll) {
+                    break;
+                }
+                v /= 1000.0;
+                idx--;
+            }
+            snprintf(out, cap, "%.2f %s", v, up[idx]);
         } else {
-            snprintf(out, cap, "%.1f %s", s->value, unit);
+            static const char *const wup[] = {"MW", "kW", "W"};
+            double v = s->value;
+            size_t idx = (sizeof(wup) / sizeof(wup[0])) - 1; /* start at W */
+            const double roll = 999.95; /* one decimal place */
+            for (size_t k = 0; k + 1 < sizeof(wup) / sizeof(wup[0]); k++) {
+                if (fabs(v) < roll) {
+                    break;
+                }
+                v /= 1000.0;
+                idx--;
+            }
+            snprintf(out, cap, "%.1f %s", v, wup[idx]);
         }
         break;
     default:
