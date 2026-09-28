@@ -1,0 +1,1 @@
+savedcmd_nct6687.ko := ld -r -m elf_x86_64 -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T /usr/lib/modules/7.2.2-arch1-1/build/scripts/module.lds -o nct6687.ko nct6687.o nct6687.mod.o .module-common.o

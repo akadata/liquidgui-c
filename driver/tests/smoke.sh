@@ -73,11 +73,14 @@ find_hwmon() {
 
 echo "== build =="
 if make kver="$kver" build >$buildlog 2>&1; then
-	if grep -Ei '\bwarning\b|error:' $buildlog \
-	     | grep -v 'pahole version differs' | grep -q .; then
-		no "compiles without diagnostics"
-		grep -Ei '\bwarning\b|error:' $buildlog \
-		     | grep -v 'pahole version differs' | sed 's/^/        /'
+	# Only diagnostics from compiling nct6687.c. kbuild emits notices about
+	# the host toolchain that say nothing about this driver's code: the pahole
+	# BTF version mismatch, "the compiler differs from the one used to build
+	# the kernel", and "Skipping BTF generation" when vmlinux is absent. Those
+	# vary with the image, not with the driver.
+	if grep -qE 'nct6687\.c:[0-9]+.*(warning|error)' $buildlog; then
+		no "compiler diagnostics in nct6687.c"
+		grep -E 'nct6687\.c:[0-9]+.*(warning|error)' $buildlog | sed 's/^/        /'
 	else
 		ok "compiles without diagnostics for ${kver}"
 	fi
