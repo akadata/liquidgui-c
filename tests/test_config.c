@@ -377,6 +377,52 @@ static void test_curve_normalisation(void)
     check(out[3].temp == 110, "temperature clamped to the hard maximum");
 }
 
+/*
+ * A stored exit mode of handback is corrected on load.
+ *
+ * Handback was the default before it was measured unsafe, so a config written
+ * by an earlier version carries exit_mode=1 without the user having chosen it.
+ * pwm_enable=2 means "the controller runs its own curve" on nct6687, but was
+ * measured on nzxt_kraken3 to zero both outputs and stop the radiator fan, which
+ * is why the default changed. Honouring a stored 1 would reintroduce that on
+ * every machine upgraded from a prior version, which is all of them.
+ */
+static void test_exit_mode_is_safe(const char *config_path)
+{
+    struct {
+        const char *json;
+        lg_exit_mode want;
+        const char *what;
+    } cases[] = {
+        {"{\"version\":2,\"settings\":{\"exit_mode\":1}}", LG_EXIT_RESTORE_SPEED,
+         "stored handback is corrected to full speed"},
+        {"{\"version\":2,\"settings\":{}}", LG_EXIT_RESTORE_SPEED,
+         "absent key falls back to full speed"},
+        {"{\"version\":2,\"settings\":{\"exit_mode\":0}}", LG_EXIT_RESTORE_SPEED,
+         "full speed is preserved"},
+        {"{\"version\":2,\"settings\":{\"exit_mode\":2}}", LG_EXIT_LEAVE,
+         "leave as-is is preserved, it is a deliberate choice"},
+    };
+
+    lg_snapshot snap;
+    build_fixture(&snap);
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        write_file(config_path, cases[i].json);
+        lg_config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        lg_config_load(&cfg, &snap, g_fixture);
+        check(cfg.exit_mode == cases[i].want, cases[i].what);
+    }
+
+    /* A config defaulting to handback must never survive a load. */
+    lg_config fresh;
+    memset(&fresh, 0, sizeof(fresh));
+    lg_config_init(&fresh);
+    check(fresh.exit_mode == LG_EXIT_RESTORE_SPEED,
+          "a fresh config defaults to full speed, not handback");
+}
+
 int main(int argc, char **argv)
 {
     /* Honour an explicit path, otherwise exercise the real lookup. */
@@ -392,6 +438,8 @@ int main(int argc, char **argv)
     test_roundtrip(config_path);
     test_presets();
     test_curve_normalisation();
+    unlink(config_path);
+    test_exit_mode_is_safe(config_path);
     unlink(config_path);
 
     remove_fixture_tree();

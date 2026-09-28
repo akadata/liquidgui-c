@@ -513,7 +513,18 @@ bool lg_config_load(lg_config *cfg, const lg_snapshot *snap, const char *hwmon_r
 
     const lg_json *settings = lg_json_get(root, "settings");
     if (settings != NULL) {
-        cfg->exit_mode = (lg_exit_mode)lg_json_get_num(settings, "exit_mode", LG_EXIT_HANDBACK);
+        /*
+         * Default to full speed, not handback, when the key is absent.
+         *
+         * Full speed is the safe default because handback is not safe
+         * everywhere: pwm_enable=2 means "the controller runs its own curve" on
+         * nct6687, but it was measured on nzxt_kraken3 to zero both outputs and
+         * stop the radiator fan. An old config that predates the setting simply
+         * has no key, and the value it falls back to is what the app does when
+         * it exits, so the fallback is a safety decision rather than a
+         * cosmetic default.
+         */
+        cfg->exit_mode = (lg_exit_mode)lg_json_get_num(settings, "exit_mode", LG_EXIT_RESTORE_SPEED);
         cfg->failsafe_temp = (int)lg_json_get_num(settings, "failsafe_temp", cfg->failsafe_temp);
         cfg->stall_duty = (int)lg_json_get_num(settings, "stall_duty", cfg->stall_duty);
         cfg->stall_samples = (int)lg_json_get_num(settings, "stall_samples", cfg->stall_samples);
@@ -603,9 +614,33 @@ bool lg_config_load(lg_config *cfg, const lg_snapshot *snap, const char *hwmon_r
         }
     }
 
+    /*
+     * Correct a stored handback setting.
+     *
+     * Handback was the default before it was measured unsafe, so a config
+     * written by an earlier version carries exit_mode=1 without the user ever
+     * choosing it. Following it would reintroduce the failure that made the
+     * default change necessary: pwm_enable=2 stops the radiator fan on
+     * nzxt_kraken3.
+     *
+     * This overrides the stored value rather than leaving it, because the
+     * failure mode is a stopped fan and the setting is a preference the user
+     * had no way of knowing was dangerous. It stays selectable deliberately
+     * from the interface, for boards where handback is known to be correct.
+     */
+    bool corrected_exit_mode = false;
+    if (cfg->exit_mode == LG_EXIT_HANDBACK) {
+        cfg->exit_mode = LG_EXIT_RESTORE_SPEED;
+        corrected_exit_mode = true;
+    }
+
     lg_json_doc_free(doc);
 
-    if (from_legacy_flat || cfg->migrated > 0) {
+    if (corrected_exit_mode) {
+        report(cfg, "exit mode was set to hand back, which stops the fan on some "
+                    "boards; using full speed instead. Select hand back in the "
+                    "interface to override.");
+    } else if (from_legacy_flat || cfg->migrated > 0) {
         report(cfg, "migrated %zu curve(s) to stable keys; %zu could not be placed.",
                cfg->migrated, cfg->orphans);
     } else if (cfg->orphans > 0) {
